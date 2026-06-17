@@ -40,3 +40,6 @@ secrets.*
 
 # OS
 .DS_Store
+
+# web/news lookup cache (runtime, regenerated)
+.webcache/

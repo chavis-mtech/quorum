@@ -24,7 +24,10 @@ _DEFAULTS: dict[str, Any] = {
     "judge": {"enabled": True, "provider": "ollama", "model": "qwen3:14b",
               "ollama_url": "http://localhost:11434", "base_url": "",
               "api_key": "", "thinking": True, "fallback": ["ollama", "none"]},
-    "news": {"provider": "auto", "lookback_hours": 48, "max_articles": 20},
+    # cache_ttl_hours: web/news lookups are cached per symbol for this long (news does not
+    # change every 15-min cycle) → far fewer network calls, stable context, less prompt churn.
+    "news": {"provider": "auto", "lookback_hours": 48, "max_articles": 20,
+             "cache_ttl_hours": 12},
     "risk": {"max_position_pct": 0.10, "daily_loss_limit": 0.05,
              "max_open_positions": 5},
 }

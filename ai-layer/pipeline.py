@@ -21,8 +21,19 @@ from agents.trend_ml import TrendMlAgent
 from agents.news import NewsAgent
 from aggregator import aggregate
 from judge import judge as run_judge, judge_stream
-from providers import bitkub, news_provider, websearch
+from providers import bitkub, news_provider, web_cache, websearch
 from trace import Trace
+
+
+def _cache_origin(meta: dict) -> str:
+    """Human-readable label for how web/news data was served (for the reasoning trace)."""
+    age = meta.get("age_s", 0)
+    age_str = f"{age // 3600}h" if age >= 3600 else f"{age // 60}m"
+    if meta.get("stale"):
+        return f"stale {age_str} (live fetch failed)"
+    if meta.get("cached"):
+        return f"cached {age_str}"
+    return "fresh"
 
 _NAME = {"BTC": "Bitcoin", "ETH": "Ethereum", "XRP": "Ripple", "ADA": "Cardano",
          "DOGE": "Dogecoin", "SOL": "Solana", "BNB": "BNB", "USDT": "Tether"}
@@ -153,19 +164,33 @@ def analyze_symbol_stream(symbol: str, cfg: dict[str, Any],
            data=structure)
     yield {"type": "stage", "stage": "data", "pct": 20, "label": "Price structure summary"}
 
-    # 2) live web data + news
-    yield {"type": "stage", "stage": "web", "pct": 24, "label": "Searching news/live data from web"}
-    web = websearch.market_context(symbol, _NAME.get(symbol.upper()))
-    news = news_provider.get_headlines(symbol, cfg["news"]["provider"],
-                                       cfg["news"]["lookback_hours"], cfg["news"]["max_articles"])
+    # 2) live web data + news — cached per symbol (news doesn't change every 15-min cycle),
+    #    so we only hit the network when the cache is stale → fewer calls, stable, cheaper.
+    sym_u = symbol.upper()
+    ttl = float(cfg["news"].get("cache_ttl_hours", 12)) * 3600.0
+    yield {"type": "stage", "stage": "web", "pct": 24, "label": "Checking news/live data (cached)"}
+    _w = web_cache.get_or_fetch(
+        f"web:{sym_u}", ttl,
+        lambda: websearch.market_context(symbol, _NAME.get(sym_u)),
+        ok=lambda v: bool(v and v.get("count", 0) > 0),
+    )
+    web = _w["value"] or {"query": "", "snippets": [], "source": "none", "count": 0}
+    _n = web_cache.get_or_fetch(
+        f"news:{sym_u}", ttl,
+        lambda: news_provider.get_headlines(symbol, cfg["news"]["provider"],
+                                            cfg["news"]["lookback_hours"], cfg["news"]["max_articles"]),
+        ok=lambda v: bool(v and v.get("headlines")),
+    )
+    news = _n["value"] or {"headlines": [], "source": "none"}
     web_headlines = [s.lstrip("- ") for s in web["snippets"]]
     all_headlines = news["headlines"] + web_headlines
-    tr.add("web", "Searching current data from web",
-           f"DuckDuckGo: {web['count']} results · news: {len(news['headlines'])} from {news['source']}",
+    cache_note = f"web={_cache_origin(_w)} · news={_cache_origin(_n)}"
+    tr.add("web", "News / live web data",
+           f"DuckDuckGo: {web['count']} results · news: {len(news['headlines'])} from {news['source']} · {cache_note}",
            status="done" if (web["count"] or news["headlines"]) else "warn",
-           data={"web_source": web["source"], "snippets": web["snippets"][:5]})
+           data={"web_source": web["source"], "snippets": web["snippets"][:5], "cache": cache_note})
     yield {"type": "stage", "stage": "web", "pct": 30,
-           "label": f"Got news {len(news['headlines'])} · web {web['count']}"}
+           "label": f"News {len(news['headlines'])} · web {web['count']} ({cache_note})"}
 
     ctx = MarketContext(
         symbol=symbol, quote=quote, candles=candle_data["candles"], last_price=last_price,
