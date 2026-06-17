@@ -1,0 +1,64 @@
+# Quorum — configuration
+# ปรับค่าตรงนี้แล้วระบบจะอ่านอัตโนมัติ (ai-layer/config_loader.py)
+
+[general]
+# โหมดเทรด: "paper" (จำลอง) | "live" (เงินจริง) | "signal-only" (ส่งสัญญาณเฉย ๆ)
+mode = "signal-only"
+
+[market]
+# broker ที่ใช้: "paper" | "bitkub"
+broker = "bitkub"
+# สัญลักษณ์ที่จะวิเคราะห์ — เลือกเองได้ (Bitkub ใช้รูปแบบ THB_BTC, THB_ETH, ...)
+# CLI: python -m ai-layer.cli BTC ETH  จะ override ค่านี้
+symbols = ["BTC", "ETH"]
+quote = "THB"           # สกุลเงินอ้างอิงของ Bitkub
+candle_interval = "1h"  # 1m, 5m, 15m, 1h, 4h, 1d
+candle_lookback = 200   # จำนวนแท่งเทียนย้อนหลังที่ดึงมาวิเคราะห์
+
+[agents]
+# คณะที่ปรึกษา — AI สำเร็จรูปจากตลาดหลายตัววิเคราะห์พร้อมกัน แล้วโหวต
+technical  = true       # pandas-ta / indicators (quant)
+trend_ml   = true       # momentum/trend หลายสเกล (quant)
+finbert    = true       # ProsusAI/finbert — sentiment การเงิน (HF, pre-built)
+cryptobert = true       # ElKulako/cryptobert — sentiment คริปโตโดยเฉพาะ (HF, pre-built)
+news       = true       # ชั้นตรวจข่าวบน network + สิทธิ์ veto
+
+[consensus]
+# "เอาแนวคิดที่ค่อนข้างจะตรงกัน" = ปรับ threshold ตรงนี้
+min_agreement  = 3      # ต้องมี agent อย่างน้อยกี่ตัวเห็นตรงกัน
+min_confidence = 0.60   # ความเชื่อมั่นเฉลี่ยขั้นต่ำ (0.0 - 1.0) ไม่ถึง = HOLD
+# น้ำหนักเริ่มต้นของแต่ละ agent (จะถูกคูณกับ confidence)
+# reliability จะถูกปรับตาม track record ภายหลังได้
+[consensus.weights]
+technical  = 1.0
+finbert    = 0.9
+cryptobert = 0.9
+trend_ml   = 1.0
+news       = 0.8
+
+[judge]
+# Judge LLM ขั้นสุดท้าย — เน้น local ก่อน
+enabled  = true
+provider = "ollama"           # "ollama" | "groq" | "gemini" | "none"
+# แนะนำสำหรับ MacBook Pro M-series RAM 24GB (Qwen3 — ใหม่/ดีกว่า 2.5):
+#   qwen3:14b       → คุณภาพสูง เก่ง JSON/reasoning (~9GB, แนะนำเป็นหลัก)
+#   qwen3:30b-a3b   → MoE คุณภาพสุด แต่ ~18GB ตึง (ใช้เมื่อไม่รัน FinBERT local)
+#   qwen3:8b        → เร็วกว่า เหลือ RAM เยอะ (~5GB, ตัวสำรอง)
+# ติดตั้ง: ollama pull qwen3:14b
+# (Qwen3 มี thinking mode: เปิดเพื่อตัดสินดีขึ้น / ปิด /no_think เพื่อความเร็ว)
+model    = "qwen3:14b"
+ollama_url = "http://localhost:11434"
+# fallback chain เมื่อตัวหลักล่ม (ซ้ายไปขวา)
+fallback = ["ollama", "none"]
+
+[news]
+# ชั้นตรวจสอบข่าว — ใส่ API key ผ่าน env var เท่านั้น (ห้าม hardcode)
+# ตั้งค่า: export FINNHUB_API_KEY=...  /  export NEWSAPI_KEY=...
+provider = "auto"       # "finnhub" | "newsapi" | "rss" | "auto" | "none"
+lookback_hours = 48
+max_articles = 20
+
+[risk]
+max_position_pct   = 0.10   # ขนาดสูงสุดต่อ 1 position (ของพอร์ต)
+daily_loss_limit   = 0.05   # หยุดเทรดเมื่อขาดทุนเกิน 5% ต่อวัน
+max_open_positions = 5

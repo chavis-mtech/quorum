@@ -1,0 +1,35 @@
+# บริการพื้นฐานสำหรับ dev: PostgreSQL + Ollama
+# ใช้: docker compose up -d
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: quorum-pg
+    environment:
+      POSTGRES_USER: quorum
+      POSTGRES_PASSWORD: quorum
+      POSTGRES_DB: quorum
+    ports:
+      - "5432:5432"
+    volumes:
+      - quorum_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quorum"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Ollama — รัน LLM local (Judge). บน macOS Apple Silicon แนะนำติดตั้ง Ollama
+  # native (https://ollama.com) เพื่อใช้ Metal GPU แทน container นี้
+  # container นี้ไว้สำหรับ Linux/dev ที่ไม่อยากลง native
+  ollama:
+    image: ollama/ollama:latest
+    container_name: quorum-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - quorum_ollama:/root/.ollama
+    profiles: ["with-ollama"]
+
+volumes:
+  quorum_pgdata:
+  quorum_ollama:

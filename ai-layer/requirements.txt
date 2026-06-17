@@ -1,0 +1,24 @@
+# Quorum AI layer — minimum "runs with no extra installs" (stdlib only)
+# Everything below is optional — install to get full model quality
+
+# --- pre-built sentiment models from Hugging Face ---
+# transformers>=4.40
+# torch>=2.2            # or tensorflow depending on your machine
+#   used by 2 pre-built models:
+#     ProsusAI/finbert     — financial sentiment
+#     ElKulako/cryptobert  — crypto-specific sentiment
+#   (not required — agents fall back to keyword scoring if missing)
+
+# --- pre-built technical indicators ---
+# pandas>=2.0
+# pandas-ta>=0.3.14b
+
+# --- optional ML extras (for custom training or additional models) ---
+# scikit-learn>=1.4
+# numpy>=1.26
+
+# --- testing ---
+# pytest>=8.0
+
+# Note: cli.py / aggregator / pipeline run with Python 3.11+ stdlib only
+# (every agent has a fallback) — install the optional packages above to upgrade analysis quality
