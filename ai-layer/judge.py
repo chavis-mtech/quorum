@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -302,8 +303,12 @@ def _finalize_llm_verdict(out: dict[str, Any], prov: str, cfg: dict[str, Any],
                           price: float | None, ctx: dict[str, Any]) -> dict[str, Any]:
     """Normalise an LLM verdict, stamp the engine/thinking, then apply entry discipline."""
     v = _defaults(out["verdict"], price)
-    v["engine"] = f"{prov}:{cfg.get('model')}"
+    model_used = out.get("_model") or cfg.get("model")
+    label = "gemini" if _is_gemini_cfg(prov, cfg) else prov
+    v["engine"] = f"{label}:{model_used}"
     v["thinking"] = out.get("thinking", "")
+    if out.get("_rotation"):
+        v["reasoning"] = (str(v.get("reasoning", "")) + f" | {out['_rotation']}")[:4000]
     return _apply_entry_discipline(v, ctx)
 
 
@@ -482,6 +487,70 @@ def _openai_compatible(prompt: str, api_key: str, base_url: str, model: str, tim
     return {"verdict": _extract_json(text), "thinking": ""}, None
 
 
+# ─── Gemini model auto-rotation (free-tier rate-limit survival) ──────────────────
+# Google's free tier rate-limits PER MODEL (RPM/TPM/RPD). When the active Gemini model
+# returns 429 / RESOURCE_EXHAUSTED / quota, transparently fall over to the next Gemini
+# text model instead of giving up the LLM judge. Models are ordered by how much free-tier
+# headroom they have (RPD first). A model that 429s is put on a short cooldown so we stop
+# hammering it; once every model is cooling down the normal provider chain takes over
+# (→ ollama / rule-based planner), so trading never stalls.
+_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+_GEMINI_ROTATION = [
+    "gemini-3.1-flash-lite",  # 15 RPM / 500 RPD — most daily headroom
+    "gemini-2.5-flash-lite",  # 10 RPM / 20 RPD
+    "gemini-2.5-flash",       #  5 RPM / 20 RPD
+    "gemini-3-flash",         #  5 RPM / 20 RPD
+]
+_MODEL_COOLDOWN: dict[str, float] = {}   # model -> epoch seconds until which it is skipped
+_RATE_LIMIT_COOLDOWN_S = 600             # skip a rate-limited model for 10 minutes
+
+
+def _is_rate_limited_err(err: str | None) -> bool:
+    e = (err or "").lower()
+    return any(s in e for s in ("429", "rate limit", "resource_exhausted",
+                                "quota", "too many requests"))
+
+
+def _is_gemini_cfg(provider: str, cfg: dict[str, Any]) -> bool:
+    return provider == "gemini" or "generativelanguage.googleapis.com" in (cfg.get("base_url") or "")
+
+
+def _gemini_model_order(cfg: dict[str, Any]) -> list[str]:
+    """Configured model first, then any user fallback_models, then the built-in rotation —
+    de-duplicated. Models not on cooldown are tried before ones that are (last-resort)."""
+    ordered: list[str] = []
+    for m in [(cfg.get("model") or "").strip(), *cfg.get("fallback_models", []), *_GEMINI_ROTATION]:
+        if m and m not in ordered:
+            ordered.append(m)
+    now = time.time()
+    ready = [m for m in ordered if _MODEL_COOLDOWN.get(m, 0.0) <= now]
+    cooling = [m for m in ordered if _MODEL_COOLDOWN.get(m, 0.0) > now]
+    return ready + cooling
+
+
+def _gemini_rotate(prompt: str, cfg: dict[str, Any]):
+    """Try Gemini models in order until one answers; cooldown any that hit a rate limit."""
+    key = cfg.get("api_key", "")
+    if not key:
+        return None, "gemini: API key not configured"
+    base = cfg.get("base_url") or _GEMINI_BASE_URL
+    errors: list[str] = []
+    for model in _gemini_model_order(cfg):
+        out, err = _openai_compatible(prompt, key, base, model)
+        if out and out.get("verdict", {}).get("action"):
+            out["_model"] = model                 # let the engine label show what actually answered
+            _MODEL_COOLDOWN.pop(model, None)
+            if errors:
+                out["_rotation"] = f"rotated to {model} after: {' | '.join(errors)}"
+            return out, None
+        if _is_rate_limited_err(err):
+            _MODEL_COOLDOWN[model] = time.time() + _RATE_LIMIT_COOLDOWN_S
+            errors.append(f"{model}: rate-limited")
+        else:
+            errors.append(f"{model}: {err or 'no action in response'}")
+    return None, "all Gemini models unavailable → " + " | ".join(errors)
+
+
 def _call_provider(provider: str, prompt: str, cfg: dict[str, Any], want_think: bool):
     model = cfg.get("model", "qwen3:14b")
     if provider == "ollama":
@@ -491,6 +560,10 @@ def _call_provider(provider: str, prompt: str, cfg: dict[str, Any], want_think: 
         if not key:
             return None, f"{provider}: API key not configured"
         return _anthropic(prompt, key, model)
+    # Gemini (explicit provider, or any openai-compatible config pointed at Google's endpoint)
+    # → auto-rotate across Gemini models on rate limits.
+    if _is_gemini_cfg(provider, cfg):
+        return _gemini_rotate(prompt, cfg)
     if provider in ("openai", "groq", "openrouter", "openai_compatible", "custom"):
         key = cfg.get("api_key", "")
         if not key:
