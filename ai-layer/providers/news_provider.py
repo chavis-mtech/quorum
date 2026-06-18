@@ -3,7 +3,7 @@
 Supported providers (selected automatically based on set env vars):
   - Finnhub   : requires FINNHUB_API_KEY
   - NewsAPI   : requires NEWSAPI_KEY
-  - none      : returns [] (system still runs, news/finbert agent will report no data)
+  - none      : returns [] (system still runs, news/sentiment agent will report no data)
 
 Do not hardcode keys — read from environment variables only
 """

@@ -10,36 +10,10 @@ BUY, SELL, HOLD = "BUY", "SELL", "HOLD"
 VALID_ACTIONS = {BUY, SELL, HOLD}
 
 
-def load_text_classifier(model_id: str, **kwargs: Any):
-    """Load a HF text-classification pipeline in the lightest way without reducing accuracy
-
-    - GPU (cuda) or Apple MPS available → use float16 (half the VRAM, negligible accuracy loss)
-    - CPU only → keep float32 (fp16 on CPU risks unsupported ops → leave it alone)
-    - Constrain torch to a single thread to reduce memory arena (does not affect results)
-    Returns the pipeline or raises an exception (let the caller fallback to lexicon)
-    """
-    from transformers import pipeline  # type: ignore
-
-    pipe_kwargs: dict[str, Any] = {"model": model_id, "top_k": None, **kwargs}
-    try:
-        import torch  # type: ignore
-
-        torch.set_num_threads(1)  # 2 small models don't need multi-thread distribution → less memory
-        if torch.cuda.is_available():
-            pipe_kwargs["torch_dtype"] = torch.float16
-            pipe_kwargs["device"] = 0
-        elif getattr(getattr(torch, "backends", None), "mps", None) and torch.backends.mps.is_available():
-            pipe_kwargs["torch_dtype"] = torch.float16
-            pipe_kwargs["device"] = "mps"
-    except Exception:
-        pass  # no torch or detection failed → leave default (CPU fp32)
-    return pipeline("text-classification", **pipe_kwargs)
-
-
 @dataclass
 class AgentResult:
     """Analysis result from a single agent — uniform format across all agents"""
-    agent: str               # "technical" | "finbert" | "trend_ml" | "news"
+    agent: str               # "technical" | "trend_ml" | "sentiment" | "news"
     action: str              # BUY | SELL | HOLD
     confidence: float        # 0.0 - 1.0
     reasoning: str           # brief explanation of the decision

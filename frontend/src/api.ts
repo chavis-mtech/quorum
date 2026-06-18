@@ -57,6 +57,11 @@ export interface Verdict {
   stop_price: number;
   invalidation: string;
   next_step: string;
+  // trend-gate scoring (delivered via the reasoning trace; optional on the parsed verdict)
+  conviction?: number;       // 0..1 — likelihood the move continues in the calculated direction
+  reversal_risk?: number;    // 0..1 — risk the next move turns against the action
+  trend_dir?: string;        // up | down | sideways
+  trend_gate?: string;       // aligned | reversal-confirmed | blocked | n/a
 }
 
 export interface TradePlan {

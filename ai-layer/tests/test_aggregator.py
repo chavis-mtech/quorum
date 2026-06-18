@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agents.base import AgentResult, BUY, SELL, HOLD
 from aggregator import aggregate
 
-W = {"technical": 1.0, "finbert": 0.9, "trend_ml": 1.0, "news": 0.8}
+W = {"technical": 1.0, "sentiment": 0.9, "trend_ml": 1.0, "news": 0.8}
 
 
 def _r(agent, action, conf, can_veto=False, veto=False):
@@ -24,7 +24,7 @@ def _r(agent, action, conf, can_veto=False, veto=False):
 def test_veto_forces_hold():
     res = aggregate([
         _r("technical", BUY, 0.9), _r("trend_ml", BUY, 0.9),
-        _r("finbert", BUY, 0.9),
+        _r("sentiment", BUY, 0.9),
         _r("news", HOLD, 0.9, can_veto=True, veto=True),
     ], weights=W, min_agreement=3, min_confidence=0.6)
     assert res.action == HOLD and res.vetoed is True
@@ -34,7 +34,7 @@ def test_below_agreement_threshold():
     # only 2 agents agree < min_agreement=3
     res = aggregate([
         _r("technical", BUY, 0.9), _r("trend_ml", BUY, 0.9),
-        _r("finbert", SELL, 0.8), _r("news", SELL, 0.8),
+        _r("sentiment", SELL, 0.8), _r("news", SELL, 0.8),
     ], weights=W, min_agreement=3, min_confidence=0.6)
     assert res.action == HOLD and res.passed_threshold is False
 
@@ -42,7 +42,7 @@ def test_below_agreement_threshold():
 def test_below_confidence_threshold():
     res = aggregate([
         _r("technical", BUY, 0.4), _r("trend_ml", BUY, 0.4),
-        _r("finbert", BUY, 0.4), _r("news", HOLD, 0.3),
+        _r("sentiment", BUY, 0.4), _r("news", HOLD, 0.3),
     ], weights=W, min_agreement=3, min_confidence=0.6)
     assert res.action == HOLD  # 3 agree but average confidence < 0.6
 
@@ -50,7 +50,7 @@ def test_below_confidence_threshold():
 def test_passes_consensus():
     res = aggregate([
         _r("technical", BUY, 0.8), _r("trend_ml", BUY, 0.75),
-        _r("finbert", BUY, 0.7), _r("news", HOLD, 0.3),
+        _r("sentiment", BUY, 0.7), _r("news", HOLD, 0.3),
     ], weights=W, min_agreement=3, min_confidence=0.6)
     assert res.action == BUY and res.passed_threshold is True
     assert res.agreement == 3
