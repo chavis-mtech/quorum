@@ -16,24 +16,23 @@ candle_interval = "1h"  # 1m, 5m, 15m, 1h, 4h, 1d
 candle_lookback = 200   # จำนวนแท่งเทียนย้อนหลังที่ดึงมาวิเคราะห์
 
 [agents]
-# คณะที่ปรึกษา — AI สำเร็จรูปจากตลาดหลายตัววิเคราะห์พร้อมกัน แล้วโหวต
-technical  = true       # pandas-ta / indicators (quant)
-trend_ml   = true       # momentum/trend หลายสเกล (quant)
-finbert    = true       # ProsusAI/finbert — sentiment การเงิน (HF, pre-built)
-cryptobert = true       # ElKulako/cryptobert — sentiment คริปโตโดยเฉพาะ (HF, pre-built)
-news       = true       # ชั้นตรวจข่าวบน network + สิทธิ์ veto
+# คณะที่ปรึกษา 4 มุมมองที่ไม่ซ้ำซ้อนกัน — วิเคราะห์พร้อมกันแล้วโหวต
+technical  = true       # โครงสร้างราคา/อินดิเคเตอร์ (quant, มี veto โครงสร้าง)
+trend_ml   = true       # momentum/trend หลายสเกล + ตรวจ regime (quant)
+sentiment  = true       # วิเคราะห์ข่าว+เว็บแบบ lexicon (รวม finbert+cryptobert เดิม, ไม่ต้องใช้ torch)
+news       = true       # ชั้นตรวจข่าววิกฤต + สิทธิ์ veto (ชั้นความปลอดภัย)
+# หมายเหตุ: finbert/cryptobert เดิมถูกยุบรวมเป็น `sentiment` (ตัวเดียว เบา เสถียร ไม่ abstain)
 
 [consensus]
 # "เอาแนวคิดที่ค่อนข้างจะตรงกัน" = ปรับ threshold ตรงนี้
-min_agreement  = 3      # ต้องมี agent อย่างน้อยกี่ตัวเห็นตรงกัน
+min_agreement  = 3      # ต้องมี agent อย่างน้อยกี่ตัวเห็นตรงกัน (ลดเป็น 2 ถ้าอยากให้เข้าไม้บ่อยขึ้น)
 min_confidence = 0.60   # ความเชื่อมั่นเฉลี่ยขั้นต่ำ (0.0 - 1.0) ไม่ถึง = HOLD
 # น้ำหนักเริ่มต้นของแต่ละ agent (จะถูกคูณกับ confidence)
-# reliability จะถูกปรับตาม track record ภายหลังได้
+# sentiment ถ่วงน้ำหนักต่ำ = เป็นเสียงสนับสนุน ไม่ใช่ตัวขับการเทรด (technical/trend_ml ต้องเห็นด้วยเสมอ)
 [consensus.weights]
 technical  = 1.0
-finbert    = 0.9
-cryptobert = 0.9
 trend_ml   = 1.0
+sentiment  = 0.6
 news       = 0.8
 
 [judge]

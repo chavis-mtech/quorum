@@ -1,15 +1,9 @@
-# Quorum AI layer — minimum "runs with no extra installs" (stdlib only)
-# Everything below is optional — install to get full model quality
+# Quorum AI layer — runs on Python 3.11+ stdlib only, NO heavy ML deps required.
+# Every advisor (technical, trend_ml, sentiment, news) is pure-Python. The `sentiment`
+# advisor uses a curated negation/intensity-aware lexicon — no transformers/torch needed,
+# so a small server runs the full council reliably alongside the local LLM judge.
 
-# --- pre-built sentiment models from Hugging Face ---
-# transformers>=4.40
-# torch>=2.2            # or tensorflow depending on your machine
-#   used by 2 pre-built models:
-#     ProsusAI/finbert     — financial sentiment
-#     ElKulako/cryptobert  — crypto-specific sentiment
-#   (not required — agents fall back to keyword scoring if missing)
-
-# --- pre-built technical indicators ---
+# --- pre-built technical indicators (optional quality upgrade) ---
 # pandas>=2.0
 # pandas-ta>=0.3.14b
 

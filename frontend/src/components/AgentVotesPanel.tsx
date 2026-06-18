@@ -58,7 +58,7 @@ export default function AgentVotesPanel(props: { votes: Vote[] }) {
       {/* agents that abstained (fallback) */}
       <Show when={abstained().length > 0}>
         <div class="mt-3 border-t border-slate-800 pt-2">
-          <div class="mb-1 text-xs text-slate-600">Abstained (no model)</div>
+          <div class="mb-1 text-xs text-slate-600">{t("cons.abstainedNoData")}</div>
           <For each={abstained()}>
             {(v) => (
               <div class="py-1 opacity-40">

@@ -130,6 +130,11 @@ const D: Dict = {
   "cons.agree": { th: "เห็นตรง", en: "agree" },
   "cons.passed": { th: "ผ่านเกณฑ์", en: "passed" },
   "cons.notPassed": { th: "ไม่ถึงเกณฑ์", en: "below threshold" },
+  "cons.conviction": { th: "ความเชื่อมั่น (ไปต่อตามทิศ)", en: "Conviction (continuation)" },
+  "cons.reversalRisk": { th: "ความเสี่ยงกลับตัว", en: "Reversal risk" },
+  "cons.gateBlocked": { th: "⛔ กันซื้อสวนเทรนด์ขาลง", en: "⛔ Counter-trend buy blocked" },
+  "cons.gateReversal": { th: "↩︎ ยืนยันกลับตัวแล้ว", en: "↩︎ Reversal confirmed" },
+  "cons.abstainedNoData": { th: "งดออกเสียง (ไม่มีข้อมูล)", en: "Abstained (no data)" },
   "trace.title": { th: "🧠 กระบวนการคิดของ AI (reasoning trace)", en: "🧠 AI reasoning trace" },
   "trace.thinking": { th: "💭 ความคิดภายในของ Judge (qwen3 thinking)", en: "💭 Judge's internal thinking (qwen3)" },
 

@@ -34,6 +34,21 @@ export default function ConsensusView(props: { a: Analysis }) {
     return 0;
   };
 
+  // Trend-gate scoring (conviction / reversal-risk / gate verdict). It rides in the judge step's
+  // trace `data` — the one channel that survives the backend round-trip — with the parsed verdict
+  // as a fallback if the field is ever present there directly.
+  const gate = (): { conviction?: number; reversal_risk?: number; trend_dir?: string; trend_gate?: string } | null => {
+    const vd = v() as any;
+    if (vd?.conviction != null || vd?.trend_gate != null) return vd;
+    const steps = props.a.trace ?? [];
+    for (let i = steps.length - 1; i >= 0; i--) {
+      const d = steps[i]?.data as any;
+      if (d && (d.conviction != null || d.trend_gate != null)) return d;
+    }
+    return null;
+  };
+  const pct = (n?: number) => Math.round(Math.max(0, Math.min(1, n ?? 0)) * 100);
+
   return (
     <div class="rounded-2xl border border-slate-800 bg-slate-900 p-5">
       {/* regime + RR badges */}
@@ -56,7 +71,45 @@ export default function ConsensusView(props: { a: Analysis }) {
             RR {rr().toFixed(2)}
           </span>
         </Show>
+        <Show when={gate()?.trend_gate === "blocked"}>
+          <span class="rounded-full border border-red-900 bg-red-950/60 px-2.5 py-0.5 text-xs font-semibold text-red-300">
+            {t("cons.gateBlocked")}
+          </span>
+        </Show>
+        <Show when={gate()?.trend_gate === "reversal-confirmed"}>
+          <span class="rounded-full border border-sky-800 bg-sky-950/60 px-2.5 py-0.5 text-xs font-semibold text-sky-300">
+            {t("cons.gateReversal")}
+          </span>
+        </Show>
       </div>
+
+      {/* Conviction vs reversal-risk — "is the next move likely to follow the calculated
+          direction, or is it risky?" Two deterministic 0..100 meters from the trend gate. */}
+      <Show when={gate() && gate()!.conviction != null}>
+        <div class="mb-3 grid grid-cols-2 gap-3">
+          <div>
+            <div class="mb-1 flex items-center justify-between text-xs">
+              <span class="text-slate-400">{t("cons.conviction")}</span>
+              <span class="font-semibold text-emerald-300">{pct(gate()!.conviction)}%</span>
+            </div>
+            <div class="h-1.5 w-full rounded bg-slate-800">
+              <div class="h-1.5 rounded bg-emerald-500" style={{ width: `${pct(gate()!.conviction)}%` }} />
+            </div>
+          </div>
+          <div>
+            <div class="mb-1 flex items-center justify-between text-xs">
+              <span class="text-slate-400">{t("cons.reversalRisk")}</span>
+              <span class={`font-semibold ${pct(gate()!.reversal_risk) >= 50 ? "text-red-300" : "text-amber-300"}`}>
+                {pct(gate()!.reversal_risk)}%
+              </span>
+            </div>
+            <div class="h-1.5 w-full rounded bg-slate-800">
+              <div class={`h-1.5 rounded ${pct(gate()!.reversal_risk) >= 50 ? "bg-red-500" : "bg-amber-400"}`}
+                   style={{ width: `${pct(gate()!.reversal_risk)}%` }} />
+            </div>
+          </div>
+        </div>
+      </Show>
 
       {/* Consensus → Verdict */}
       <div class="flex items-center gap-6">

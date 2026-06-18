@@ -15,8 +15,7 @@ from typing import Any
 
 from agents.base import MarketContext
 from agents.technical import TechnicalAgent
-from agents.finbert import FinBertAgent
-from agents.cryptobert import CryptoBertAgent
+from agents.sentiment import SentimentAgent
 from agents.trend_ml import TrendMlAgent
 from agents.news import NewsAgent
 from aggregator import aggregate
@@ -121,10 +120,35 @@ def _build_agents(cfg: dict[str, Any]):
     agents = []
     if en.get("technical"):  agents.append(TechnicalAgent())
     if en.get("trend_ml"):   agents.append(TrendMlAgent())
-    if en.get("finbert"):    agents.append(FinBertAgent())
-    if en.get("cryptobert"): agents.append(CryptoBertAgent())
+    # `sentiment` replaces the old finbert+cryptobert pair (one torch-free lens, no redundancy).
+    # Default ON so a server whose quorum.toml predates this change (no `sentiment` key) still
+    # runs it; legacy finbert/cryptobert keys are intentionally ignored.
+    if en.get("sentiment", True): agents.append(SentimentAgent())
     if en.get("news"):       agents.append(NewsAgent())
     return agents
+
+
+def _agent_extra(results, name: str) -> dict[str, Any]:
+    """The extra dict of one agent's result (empty if it failed / has none)."""
+    return next((r.extra for r in results if r.agent == name and r.ok and r.extra), {})
+
+
+def _enrich_structure(structure: dict[str, Any], results) -> dict[str, Any]:
+    """Fold the EMA stack / MACD / divergence (from `technical`) and the regime structure /
+    efficiency ratio / prob_up (from `trend_ml`) into the market-structure dict, so the
+    deterministic trend gate can read everything from one place (no extra market calls)."""
+    tech = _agent_extra(results, "technical")
+    trend = _agent_extra(results, "trend_ml")
+    return {
+        **structure,
+        "ema12": tech.get("ema12"), "ema26": tech.get("ema26"), "ema50": tech.get("ema50"),
+        "macd": tech.get("macd"), "macd_signal": tech.get("macd_signal"),
+        "macd_hist": tech.get("macd_hist"), "rsi_divergence": tech.get("rsi_divergence"),
+        "adx": tech.get("adx") if tech.get("adx") is not None else structure.get("adx"),
+        "trend_structure": trend.get("structure"),
+        "efficiency_ratio": trend.get("efficiency_ratio"),
+        "prob_up": trend.get("prob_up"),
+    }
 
 
 def analyze_symbol_stream(symbol: str, cfg: dict[str, Any],
@@ -234,7 +258,8 @@ def analyze_symbol_stream(symbol: str, cfg: dict[str, Any],
     judge_cfg = cfg["judge"]
     judge_ctx: dict[str, Any] = {
         "symbol": symbol, "quote": quote, "last_price": last_price,
-        "market_structure": structure,
+        # enriched so the deterministic trend gate sees EMA/MACD/divergence + regime structure
+        "market_structure": _enrich_structure(structure, results),
         "regime": cd.get("regime", "unknown"),
     }
     if position_ctx:
@@ -257,10 +282,18 @@ def analyze_symbol_stream(symbol: str, cfg: dict[str, Any],
     verdict = verdict or run_judge(
         cd, judge_ctx,
         judge_cfg, web_snippets=web["snippets"])
+    # conviction / reversal-risk / trend-gate ride along in the trace `data` — the one channel
+    # that survives the Rust round-trip untouched (trace is raw JSON; struct fields would be dropped).
+    gate_data = {
+        "conviction": verdict.get("conviction"),
+        "reversal_risk": verdict.get("reversal_risk"),
+        "trend_dir": verdict.get("trend_dir"),
+        "trend_gate": verdict.get("trend_gate"),
+    }
     tr.add("judge", f"Final ruling → {verdict['action']} ({verdict['confidence']:.2f})",
            verdict["reasoning"], status="done",
            data={"engine": verdict.get("engine"),
-                 "thinking": verdict.get("thinking", "")})
+                 "thinking": verdict.get("thinking", ""), **gate_data})
     yield {"type": "stage", "stage": "judge", "pct": 96,
            "label": f"Result → {verdict['action']} ({verdict['confidence']:.2f})"}
 
@@ -271,6 +304,8 @@ def analyze_symbol_stream(symbol: str, cfg: dict[str, Any],
         "data_source": candle_data["source"], "synthetic": candle_data["synthetic"],
         "news_source": news["source"], "news_count": len(news["headlines"]),
         "web_source": web["source"], "web_count": web["count"],
+        "conviction": verdict.get("conviction"), "reversal_risk": verdict.get("reversal_risk"),
+        "trend_dir": verdict.get("trend_dir"), "trend_gate": verdict.get("trend_gate"),
         "consensus": cd, "verdict": verdict,
         "trace": tr.to_list(),
     }}
