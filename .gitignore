@@ -30,8 +30,12 @@ backend/*-amd64
 __pycache__/
 *.pyc
 .venv/
+.venv-test/
 venv/
 .pytest_cache/
+
+# self-learning brain state (runtime, per-deployment)
+var/
 
 # Secrets / env — ห้ามขึ้น git เด็ดขาด
 .env
