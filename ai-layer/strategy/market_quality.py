@@ -26,6 +26,8 @@ DEFAULTS = {
     "chop_er": 0.12,           # Efficiency Ratio below this...
     "chop_adx": 18.0,          # ...and ADX below this = pure chop → no trade
     "flat_atr_pct": 0.003,     # ATR < 0.3% of price = market not moving → fees dominate
+    "min_liquidity_thb": 50000.0,  # median THB traded per bar; below this the book is too thin
+    "max_atr_pct": 0.025,      # ATR > 2.5% per bar = too wild for a fixed stop → noise stops you out
 }
 
 
@@ -43,11 +45,26 @@ def assess_quality(
     er = float(s.get("efficiency_ratio") or 0.0)
     adx = float(s.get("adx") or 0.0)
     atr_pct = float(s.get("atr_pct") or 0.0)
+    liq = float(s.get("median_thb_vol") or 0.0)
     fee = float(c["fee_per_side"])
 
-    checks = {"er": er, "adx": adx, "atr_pct": atr_pct}
+    checks = {"er": er, "adx": adx, "atr_pct": atr_pct, "liquidity_thb": liq}
 
-    # 1) dead / chop market
+    # 1) liquidity — the #1 cause of heavy losses: thin coins slip through the stop and our own
+    #    order moves the book. Refuse to enter a coin that trades too little per bar.
+    if 0.0 < liq < c["min_liquidity_thb"]:
+        return {"ok": False, "checks": checks,
+                "reason": f"thin market: ~{liq:,.0f} THB/bar < {c['min_liquidity_thb']:,.0f} — "
+                          f"order book too illiquid (stop will slip, our order moves price)"}
+
+    # 2) too volatile — a coin swinging more than max_atr_pct per bar gets knifed out of a fixed
+    #    stop by ordinary noise (e.g. the AERO/EIGEN-type −10% stop-slips).
+    if atr_pct > c["max_atr_pct"]:
+        return {"ok": False, "checks": checks,
+                "reason": f"too volatile: ATR {atr_pct*100:.1f}%/bar > {c['max_atr_pct']*100:.1f}% — "
+                          f"noise will knife a fixed stop"}
+
+    # 3) dead / chop market
     if atr_pct > 0.0 and atr_pct < c["flat_atr_pct"]:
         return {"ok": False, "checks": checks,
                 "reason": f"flat market: ATR {atr_pct*100:.2f}% < {c['flat_atr_pct']*100:.1f}% — "
