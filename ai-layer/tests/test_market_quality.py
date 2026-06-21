@@ -9,12 +9,33 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from strategy import market_quality
 
 
-def _structure(er=0.4, adx=30.0, atr_pct=0.02):
-    return {"efficiency_ratio": er, "adx": adx, "atr_pct": atr_pct, "price": 100.0}
+def _structure(er=0.4, adx=30.0, atr_pct=0.02, liq=200000.0):
+    return {"efficiency_ratio": er, "adx": adx, "atr_pct": atr_pct, "price": 100.0,
+            "median_thb_vol": liq}
 
 
 def test_good_setup_passes():
     q = market_quality.assess_quality(_structure(), "trending", 100, 105, 97)
+    assert q["ok"] is True
+
+
+def test_thin_liquidity_blocked():
+    # ENA-like: ~5k THB/bar << 50k floor
+    q = market_quality.assess_quality(_structure(liq=5000.0), "trending", 100, 105, 97)
+    assert q["ok"] is False
+    assert "thin market" in q["reason"]
+
+
+def test_too_volatile_blocked():
+    # EIGEN-like: ATR 2.8%/bar > 2.5% cap
+    q = market_quality.assess_quality(_structure(atr_pct=0.028), "trending", 100, 105, 97)
+    assert q["ok"] is False
+    assert "too volatile" in q["reason"]
+
+
+def test_missing_liquidity_data_does_not_block():
+    # when liquidity is unknown (0), the liquidity gate must not fire
+    q = market_quality.assess_quality(_structure(liq=0.0), "trending", 100, 105, 97)
     assert q["ok"] is True
 
 

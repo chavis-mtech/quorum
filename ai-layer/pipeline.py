@@ -99,6 +99,12 @@ def _market_structure(candles: list[dict[str, float]], last_price: float | None)
     atr_pct = atr / price if price > 0 else 0.0
     room_to_resistance = (resistance_20 / price - 1.0) if resistance_20 else 0.0
     distance_to_support = (price / support_20 - 1.0) if support_20 else 0.0
+    # liquidity proxy — median quote-volume (volume × close) per bar over the recent window.
+    # Thin coins (low THB/bar) slip badly: stops fill well below the level and our own small order
+    # moves the book. The market-quality guard uses this to refuse illiquid coins (#1 loss cause).
+    thb_vols = sorted(float(c.get("volume", 0.0)) * float(c.get("close", 0.0))
+                      for c in candles[-50:] if c.get("close"))
+    median_thb_vol = thb_vols[len(thb_vols) // 2] if thb_vols else 0.0
     return {
         "quality": "ok",
         "price": round(price, 8),
@@ -114,6 +120,7 @@ def _market_structure(candles: list[dict[str, float]], last_price: float | None)
         "momentum_50": round(pct(50), 5),
         "distance_to_support_20": round(distance_to_support, 5),
         "room_to_resistance_20": round(room_to_resistance, 5),
+        "median_thb_vol": round(median_thb_vol, 2),
     }
 
 

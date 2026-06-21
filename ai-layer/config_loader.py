@@ -35,10 +35,11 @@ _DEFAULTS: dict[str, Any] = {
                  "min_samples_gate": 8, "min_samples_conf": 5, "block_expectancy": -0.08,
                  "block_winrate_n": 10, "block_winrate": 0.34, "breaker_min_samples": 10,
                  "breaker_expectancy": -0.20, "conf_span": 0.5, "conf_lo": 0.75, "conf_hi": 1.15},
-    # deterministic "don't trade garbage" guard (chop / flat / fee-unviable target).
+    # deterministic "don't trade garbage" guard (thin/volatile/chop/flat/fee-unviable).
     "market_quality": {"enabled": True, "fee_per_side": 0.0025, "min_target_move": 0.012,
                        "min_net_rr": 1.2, "chop_er": 0.12, "chop_adx": 18.0,
-                       "flat_atr_pct": 0.003},
+                       "flat_atr_pct": 0.003, "min_liquidity_thb": 50000.0,
+                       "max_atr_pct": 0.025},
     "risk": {"max_position_pct": 0.10, "daily_loss_limit": 0.05,
              "max_open_positions": 5},
 }
