@@ -18,8 +18,10 @@ from agents.technical import TechnicalAgent
 from agents.sentiment import SentimentAgent
 from agents.trend_ml import TrendMlAgent
 from agents.news import NewsAgent
+from agents.flow import FlowAgent
 from aggregator import aggregate
 from judge import judge as run_judge, judge_stream
+from learning import brain
 from providers import bitkub, news_provider, web_cache, websearch
 from trace import Trace
 
@@ -115,16 +117,27 @@ def _market_structure(candles: list[dict[str, float]], last_price: float | None)
     }
 
 
+def _news_enabled(cfg: dict[str, Any]) -> bool:
+    """Master switch for the web/news fetch + the headline-dependent agents (news/sentiment).
+    Default OFF: on a small server the web/news scrape was flaky, slow and edge-less, so the
+    council now runs on price+volume only (technical/trend_ml/flow). Flip `[news] enabled = true`
+    to bring the headline lens (and its CRITICAL-news veto) back."""
+    return bool(cfg.get("news", {}).get("enabled", False))
+
+
 def _build_agents(cfg: dict[str, Any]):
     en = cfg["agents"]
     agents = []
-    if en.get("technical"):  agents.append(TechnicalAgent())
-    if en.get("trend_ml"):   agents.append(TrendMlAgent())
-    # `sentiment` replaces the old finbert+cryptobert pair (one torch-free lens, no redundancy).
-    # Default ON so a server whose quorum.toml predates this change (no `sentiment` key) still
-    # runs it; legacy finbert/cryptobert keys are intentionally ignored.
-    if en.get("sentiment", True): agents.append(SentimentAgent())
-    if en.get("news"):       agents.append(NewsAgent())
+    if en.get("technical", True):  agents.append(TechnicalAgent())
+    if en.get("trend_ml", True):   agents.append(TrendMlAgent())
+    # `flow` = web-free money-flow/volume lens. Replaces the old web-scraped news+sentiment pair
+    # as the third independent voice. Default ON (even if a stale server quorum.toml lacks the key).
+    if en.get("flow", True):       agents.append(FlowAgent())
+    # news/sentiment depend on scraped headlines → only run them when the web/news fetch is on.
+    # This keeps the council deterministic regardless of a stale server config.
+    if _news_enabled(cfg):
+        if en.get("sentiment", True): agents.append(SentimentAgent())
+        if en.get("news", True):      agents.append(NewsAgent())
     return agents
 
 
@@ -188,33 +201,44 @@ def analyze_symbol_stream(symbol: str, cfg: dict[str, Any],
            data=structure)
     yield {"type": "stage", "stage": "data", "pct": 20, "label": "Price structure summary"}
 
-    # 2) live web data + news — cached per symbol (news doesn't change every 15-min cycle),
-    #    so we only hit the network when the cache is stale → fewer calls, stable, cheaper.
+    # 2) live web data + news — OFF by default. On a small server the scrape was flaky/slow and
+    #    added no edge, so the council now reads price+volume only. Flip [news] enabled=true to
+    #    restore the headline lens (+ CRITICAL-news veto). When off we skip the network entirely.
     sym_u = symbol.upper()
-    ttl = float(cfg["news"].get("cache_ttl_hours", 12)) * 3600.0
-    yield {"type": "stage", "stage": "web", "pct": 24, "label": "Checking news/live data (cached)"}
-    _w = web_cache.get_or_fetch(
-        f"web:{sym_u}", ttl,
-        lambda: websearch.market_context(symbol, _NAME.get(sym_u)),
-        ok=lambda v: bool(v and v.get("count", 0) > 0),
-    )
-    web = _w["value"] or {"query": "", "snippets": [], "source": "none", "count": 0}
-    _n = web_cache.get_or_fetch(
-        f"news:{sym_u}", ttl,
-        lambda: news_provider.get_headlines(symbol, cfg["news"]["provider"],
-                                            cfg["news"]["lookback_hours"], cfg["news"]["max_articles"]),
-        ok=lambda v: bool(v and v.get("headlines")),
-    )
-    news = _n["value"] or {"headlines": [], "source": "none"}
-    web_headlines = [s.lstrip("- ") for s in web["snippets"]]
-    all_headlines = news["headlines"] + web_headlines
-    cache_note = f"web={_cache_origin(_w)} · news={_cache_origin(_n)}"
-    tr.add("web", "News / live web data",
-           f"DuckDuckGo: {web['count']} results · news: {len(news['headlines'])} from {news['source']} · {cache_note}",
-           status="done" if (web["count"] or news["headlines"]) else "warn",
-           data={"web_source": web["source"], "snippets": web["snippets"][:5], "cache": cache_note})
-    yield {"type": "stage", "stage": "web", "pct": 30,
-           "label": f"News {len(news['headlines'])} · web {web['count']} ({cache_note})"}
+    if _news_enabled(cfg):
+        ttl = float(cfg["news"].get("cache_ttl_hours", 12)) * 3600.0
+        yield {"type": "stage", "stage": "web", "pct": 24, "label": "Checking news/live data (cached)"}
+        _w = web_cache.get_or_fetch(
+            f"web:{sym_u}", ttl,
+            lambda: websearch.market_context(symbol, _NAME.get(sym_u)),
+            ok=lambda v: bool(v and v.get("count", 0) > 0),
+        )
+        web = _w["value"] or {"query": "", "snippets": [], "source": "none", "count": 0}
+        _n = web_cache.get_or_fetch(
+            f"news:{sym_u}", ttl,
+            lambda: news_provider.get_headlines(symbol, cfg["news"]["provider"],
+                                                cfg["news"]["lookback_hours"], cfg["news"]["max_articles"]),
+            ok=lambda v: bool(v and v.get("headlines")),
+        )
+        news = _n["value"] or {"headlines": [], "source": "none"}
+        web_headlines = [s.lstrip("- ") for s in web["snippets"]]
+        all_headlines = news["headlines"] + web_headlines
+        cache_note = f"web={_cache_origin(_w)} · news={_cache_origin(_n)}"
+        tr.add("web", "News / live web data",
+               f"DuckDuckGo: {web['count']} results · news: {len(news['headlines'])} from {news['source']} · {cache_note}",
+               status="done" if (web["count"] or news["headlines"]) else "warn",
+               data={"web_source": web["source"], "snippets": web["snippets"][:5], "cache": cache_note})
+        yield {"type": "stage", "stage": "web", "pct": 30,
+               "label": f"News {len(news['headlines'])} · web {web['count']} ({cache_note})"}
+    else:
+        web = {"query": "", "snippets": [], "source": "off", "count": 0}
+        news = {"headlines": [], "source": "off"}
+        all_headlines = []
+        tr.add("web", "News / web data disabled",
+               "Data-driven mode: trading on price + volume only (news/web fetch off) — "
+               "faster and removes a flaky, edge-less input.",
+               status="done", data={"news": "disabled"})
+        yield {"type": "stage", "stage": "web", "pct": 30, "label": "Data-driven mode (news off)"}
 
     ctx = MarketContext(
         symbol=symbol, quote=quote, candles=candle_data["candles"], last_price=last_price,
@@ -256,10 +280,11 @@ def analyze_symbol_stream(symbol: str, cfg: dict[str, Any],
     verdict = None
     think_chars = 0
     judge_cfg = cfg["judge"]
+    enriched_structure = _enrich_structure(structure, results)
     judge_ctx: dict[str, Any] = {
         "symbol": symbol, "quote": quote, "last_price": last_price,
         # enriched so the deterministic trend gate sees EMA/MACD/divergence + regime structure
-        "market_structure": _enrich_structure(structure, results),
+        "market_structure": enriched_structure,
         "regime": cd.get("regime", "unknown"),
     }
     if position_ctx:
@@ -282,13 +307,34 @@ def analyze_symbol_stream(symbol: str, cfg: dict[str, Any],
     verdict = verdict or run_judge(
         cd, judge_ctx,
         judge_cfg, web_snippets=web["snippets"])
-    # conviction / reversal-risk / trend-gate ride along in the trace `data` — the one channel
-    # that survives the Rust round-trip untouched (trace is raw JSON; struct fields would be dropped).
+
+    # 5b) self-learning brain — settle past decisions against the new candles, learn the realized
+    # edge per setup, and gate THIS verdict: a BUY in a proven-loser setup / chop / fee-unviable
+    # conditions is converted to HOLD and shadow-tracked instead. Best-effort: a failure here must
+    # never block a decision, so it is fully wrapped and degrades to "no learning this cycle".
+    learning_info: dict[str, Any] = {"enabled": False}
+    try:
+        learning_info = brain.evaluate(
+            symbol, candle_data["candles"], enriched_structure, cd, verdict,
+            cd.get("regime", "unknown"), candle_data["synthetic"], cfg)
+        verdict = brain.apply(verdict, learning_info)
+    except Exception as exc:  # pragma: no cover - safety net
+        learning_info = {"enabled": False, "summary": f"🧠 learning error: {exc}"}
+    if learning_info.get("enabled"):
+        tr.add("learning", "Self-learning review", learning_info.get("summary", ""),
+               status="warn" if learning_info.get("block") else "done",
+               data=learning_info)
+        yield {"type": "stage", "stage": "learning", "pct": 95,
+               "label": learning_info.get("summary", "Self-learning review")[:90]}
+
+    # conviction / reversal-risk / trend-gate / learning ride along in the trace `data` — the one
+    # channel that survives the Rust round-trip untouched (trace is raw JSON; struct fields dropped).
     gate_data = {
         "conviction": verdict.get("conviction"),
         "reversal_risk": verdict.get("reversal_risk"),
         "trend_dir": verdict.get("trend_dir"),
         "trend_gate": verdict.get("trend_gate"),
+        "learning": learning_info if learning_info.get("enabled") else None,
     }
     tr.add("judge", f"Final ruling → {verdict['action']} ({verdict['confidence']:.2f})",
            verdict["reasoning"], status="done",
@@ -306,6 +352,7 @@ def analyze_symbol_stream(symbol: str, cfg: dict[str, Any],
         "web_source": web["source"], "web_count": web["count"],
         "conviction": verdict.get("conviction"), "reversal_risk": verdict.get("reversal_risk"),
         "trend_dir": verdict.get("trend_dir"), "trend_gate": verdict.get("trend_gate"),
+        "learning": learning_info if learning_info.get("enabled") else None,
         "consensus": cd, "verdict": verdict,
         "trace": tr.to_list(),
     }}

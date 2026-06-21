@@ -16,22 +16,23 @@ candle_interval = "1h"  # 1m, 5m, 15m, 1h, 4h, 1d
 candle_lookback = 200   # จำนวนแท่งเทียนย้อนหลังที่ดึงมาวิเคราะห์
 
 [agents]
-# คณะที่ปรึกษา 4 มุมมองที่ไม่ซ้ำซ้อนกัน — วิเคราะห์พร้อมกันแล้วโหวต
+# คณะที่ปรึกษาแบบ price+volume (ไม่พึ่งข่าว/เว็บ) — วิเคราะห์พร้อมกันแล้วโหวต
 technical  = true       # โครงสร้างราคา/อินดิเคเตอร์ (quant, มี veto โครงสร้าง)
 trend_ml   = true       # momentum/trend หลายสเกล + ตรวจ regime (quant)
-sentiment  = true       # วิเคราะห์ข่าว+เว็บแบบ lexicon (รวม finbert+cryptobert เดิม, ไม่ต้องใช้ torch)
-news       = true       # ชั้นตรวจข่าววิกฤต + สิทธิ์ veto (ชั้นความปลอดภัย)
-# หมายเหตุ: finbert/cryptobert เดิมถูกยุบรวมเป็น `sentiment` (ตัวเดียว เบา เสถียร ไม่ abstain)
+flow       = true       # money-flow/volume (CMF, OBV, up/down vol) — แทน news+sentiment เดิม
+# news/sentiment พึ่ง headline จากเว็บ → จะทำงานเฉพาะเมื่อ [news].enabled = true เท่านั้น
+sentiment  = true       # วิเคราะห์ข่าว+เว็บแบบ lexicon (เปิดได้เมื่อ news.enabled=true)
+news       = true       # ชั้นตรวจข่าววิกฤต + สิทธิ์ veto (เปิดได้เมื่อ news.enabled=true)
 
 [consensus]
 # "เอาแนวคิดที่ค่อนข้างจะตรงกัน" = ปรับ threshold ตรงนี้
 min_agreement  = 3      # ต้องมี agent อย่างน้อยกี่ตัวเห็นตรงกัน (ลดเป็น 2 ถ้าอยากให้เข้าไม้บ่อยขึ้น)
 min_confidence = 0.60   # ความเชื่อมั่นเฉลี่ยขั้นต่ำ (0.0 - 1.0) ไม่ถึง = HOLD
 # น้ำหนักเริ่มต้นของแต่ละ agent (จะถูกคูณกับ confidence)
-# sentiment ถ่วงน้ำหนักต่ำ = เป็นเสียงสนับสนุน ไม่ใช่ตัวขับการเทรด (technical/trend_ml ต้องเห็นด้วยเสมอ)
 [consensus.weights]
 technical  = 1.0
 trend_ml   = 1.0
+flow       = 0.8
 sentiment  = 0.6
 news       = 0.8
 
@@ -51,11 +52,31 @@ ollama_url = "http://localhost:11434"
 fallback = ["ollama", "none"]
 
 [news]
-# ชั้นตรวจสอบข่าว — ใส่ API key ผ่าน env var เท่านั้น (ห้าม hardcode)
-# ตั้งค่า: export FINNHUB_API_KEY=...  /  export NEWSAPI_KEY=...
+# ปิดข่าว/เว็บเป็นค่าเริ่มต้น — บนเซิร์ฟเวอร์เล็กการ scrape ช้า/ไม่นิ่ง/ไม่ช่วยเรื่องกำไร
+# เปิด = true เพื่อเอา lens ข่าว (+ สิทธิ์ veto ข่าววิกฤต) กลับมา (ต้องตั้ง API key ผ่าน env)
+enabled = false
 provider = "auto"       # "finnhub" | "newsapi" | "rss" | "auto" | "none"
 lookback_hours = 48
 max_articles = 20
+
+[learning]
+# สมองเรียนรู้ด้วยตัวเอง — เก็บทุกคำตัดสิน แล้ว settle กับแท่งเทียนจริงเพื่อวัดผล (กำไร/ขาดทุนเป็น R)
+# เรียนรู้ว่า setup แบบไหน "ขาดทุนซ้ำ ๆ" แล้วบล็อกไม่ให้เข้าไม้จริง (เก็บเป็น shadow trade แทน)
+enabled            = true
+fee_per_side       = 0.0025  # ค่าธรรมเนียม Bitkub ต่อข้าง (~0.25%) — ใช้คิด R สุทธิหลังหักค่าธรรมเนียม
+max_settle_bars    = 48      # ถือสูงสุดกี่แท่งก่อน mark-to-market
+min_samples_gate   = 8       # ต้องมีผลอย่างน้อยกี่ไม้ก่อนจะ "บล็อก" setup ได้
+block_expectancy   = -0.08   # ถ้า avg R ของ setup ต่ำกว่านี้ = ขาดทุนซ้ำ → บล็อก
+breaker_expectancy = -0.20   # ถ้า live ล่าสุดขาดทุนเฉลี่ยต่ำกว่านี้ → โหมดตั้งรับ (เทรดเฉพาะ setup ที่พิสูจน์แล้ว)
+
+[market_quality]
+# กันไม่ให้เทรด "ตลาดที่ชนะไม่ได้" (sideways/แกว่ง, แทบไม่ขยับ, หรือเป้าใกล้จนค่าธรรมเนียมกินหมด)
+enabled         = true
+min_target_move = 0.012      # เป้าต้องห่างจากจุดเข้าอย่างน้อย ~1.2% (ให้พ้นค่าธรรมเนียมไป-กลับ ~0.5%)
+min_net_rr      = 1.2        # reward:risk หลังหักค่าธรรมเนียมต้อง ≥ ค่านี้
+chop_er         = 0.12       # Efficiency Ratio ต่ำกว่านี้...
+chop_adx        = 18.0       # ...และ ADX ต่ำกว่านี้ = ตลาดแกว่ง ไม่มี edge → ไม่เข้า
+flat_atr_pct    = 0.003      # ATR ต่ำกว่า 0.3% ของราคา = แทบไม่ขยับ → ไม่เข้า
 
 [risk]
 max_position_pct   = 0.10   # ขนาดสูงสุดต่อ 1 position (ของพอร์ต)
