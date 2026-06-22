@@ -24,16 +24,16 @@ from typing import Any
 
 # ── tuning (overridable via the [learning] config block) ─────────────────────────
 DEFAULTS = {
-    "min_samples_gate": 8,      # need this many settled trades before a bucket can BLOCK
+    "min_samples_gate": 6,      # need this many settled trades before a bucket can BLOCK (faster to cut losers)
     "min_samples_conf": 5,      # ...and this many before nudging confidence
     "block_expectancy": -0.08,  # avg R at/below which a bucket is a proven loser → block
-    "block_winrate_n": 10,      # with this many samples...
+    "block_winrate_n": 8,       # with this many samples...
     "block_winrate": 0.34,      # ...a win-rate below this also blocks
     "breaker_min_samples": 10,  # circuit breaker needs this many recent live trades
-    "breaker_expectancy": -0.20,# recent live avg R at/below this → defensive mode
+    "breaker_expectancy": -0.15,# recent live avg R at/below this → defensive mode
     "conf_span": 0.5,           # confidence multiplier = clamp(1 + exp*span, lo, hi)
     "conf_lo": 0.75,
-    "conf_hi": 1.15,
+    "conf_hi": 1.25,            # let a strongly-proven winner clear the backend confidence floor
 }
 
 

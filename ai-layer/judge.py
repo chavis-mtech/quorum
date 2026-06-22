@@ -73,9 +73,9 @@ You receive data from multiple AI agents (technical, trend_ml, sentiment, news) 
 6) Specify invalidation (what breaks the thesis) and next_step.
 
 ━━━━━━ REWARD:RISK rules by regime ━━━━━━
-• trending  (ADX>25, ER≥0.35):  RR ≥ 1.5:1
-• weak-trend (ER 0.20-0.35):    RR ≥ 2.0:1
-• ranging    (ER<0.20, ADX<20): RR ≥ 2.5:1 (if not achievable → always HOLD)
+• trending  (ADX>25, ER≥0.35):  RR ≥ 1.4:1
+• weak-trend (ER 0.20-0.35):    RR ≥ 1.45:1
+• ranging    (ER<0.20, ADX<20): RR ≥ 1.5:1 (if not achievable → always HOLD)
 Never widen stop just to engineer an RR ratio — if RR does not meet regime threshold → HOLD.
 
 ━━━━━━ Portfolio risk management rules (iron) ━━━━━━
@@ -533,8 +533,11 @@ def _plan_from_consensus(consensus: dict[str, Any], note: str, ctx: dict[str, An
     regime = consensus.get("regime", "unknown")
     err_txt = ("\n⚠️ LLM unavailable reason: " + " | ".join(errors)) if errors else ""
 
-    # Regime-aware RR threshold
-    rr_required = {"trending": 1.5, "weak-trend": 2.0, "ranging": 2.5}.get(regime, 1.5)
+    # Regime-aware RR threshold — lowered to the RR the self-learning brain proved the edge at
+    # (ranging|up|mid 74% win / weak-trend|up|mid 75% win were measured at RR≈1.6-1.7). The old
+    # 2.0/2.5 floors HOLD'd those winners every time so the proven edge could never trade live.
+    # All ≥1.4 → produced plans still clear the backend's hard MIN_REWARD_RISK=1.35 (no recompile).
+    rr_required = {"trending": 1.4, "weak-trend": 1.45, "ranging": 1.5}.get(regime, 1.4)
 
     base: dict[str, Any] = {
         "action": action, "confidence": conf, "thesis": note,
@@ -569,6 +572,10 @@ def _plan_from_consensus(consensus: dict[str, Any], note: str, ctx: dict[str, An
 
         stop = sup if 0 < sup < price and (price - sup) <= 2.5 * atr else price - 1.5 * atr
         stop = min(stop, price * 0.995)
+        # Never PLAN a stop wider than the backend's catastrophic cap (MAX_LOSS_PCT=6%). Otherwise
+        # the planner prices RR off a wide stop the backend will truncate at -6% → realized loss is
+        # bigger than planned (the AERO/ENA negative-skew mechanism). Clamp so planned RR == realized.
+        stop = max(stop, price * (1.0 - 0.055))
         risk = price - stop
         if risk <= 0:
             return _discipline(base, ctx, consensus)

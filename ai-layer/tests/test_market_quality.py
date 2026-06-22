@@ -27,10 +27,16 @@ def test_thin_liquidity_blocked():
 
 
 def test_too_volatile_blocked():
-    # EIGEN-like: ATR 2.8%/bar > 2.5% cap
-    q = market_quality.assess_quality(_structure(atr_pct=0.028), "trending", 100, 105, 97)
+    # extreme: ATR 5%/bar > 4% cap (a 1.5×ATR stop would blow past the -6% cap)
+    q = market_quality.assess_quality(_structure(atr_pct=0.05), "trending", 100, 105, 97)
     assert q["ok"] is False
     assert "too volatile" in q["reason"]
+
+
+def test_moderately_volatile_now_allowed():
+    # "risky ok": a 3%/bar coin used to be blocked (2.5% cap); now allowed (under 4% cap)
+    q = market_quality.assess_quality(_structure(atr_pct=0.03), "trending", 100, 106, 96)
+    assert q["ok"] is True
 
 
 def test_missing_liquidity_data_does_not_block():
