@@ -37,7 +37,8 @@ _DEFAULTS: dict[str, Any] = {
     "learning": {"enabled": True, "fee_per_side": 0.0025, "max_settle_bars": 48,
                  "min_samples_gate": 6, "min_samples_conf": 5, "block_expectancy": -0.08,
                  "block_winrate_n": 8, "block_winrate": 0.34, "breaker_min_samples": 10,
-                 "breaker_expectancy": -0.15, "conf_span": 0.5, "conf_lo": 0.75, "conf_hi": 1.25},
+                 "breaker_expectancy": -0.15, "conf_span": 0.5, "conf_lo": 0.75, "conf_hi": 1.25,
+                 "reentry_cooldown_bars": 3, "reentry_loss_threshold": -0.5},
     # deterministic "don't trade garbage" guard. Loosened for "small/risky coins ok": liquidity
     # floor 15k (only the very thinnest blocked) and ATR ceiling 4%/bar (1.5×ATR stop = the -6%
     # cap). Downside stays bounded by the planner's -5.5% stop clamp + the backend MAX_LOSS_PCT.

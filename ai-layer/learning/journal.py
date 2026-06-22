@@ -41,7 +41,7 @@ def _store_path() -> Path:
 
 
 def _empty() -> dict[str, Any]:
-    return {"version": _VERSION, "open": [], "stats": {}, "recent_live": []}
+    return {"version": _VERSION, "open": [], "stats": {}, "recent_live": [], "cooldowns": {}}
 
 
 def load() -> dict[str, Any]:
@@ -59,6 +59,7 @@ def load() -> dict[str, Any]:
             data.setdefault("open", [])
             data.setdefault("stats", {})
             data.setdefault("recent_live", [])
+            data.setdefault("cooldowns", {})
             return data
         except Exception:
             return _empty()
