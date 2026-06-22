@@ -57,14 +57,25 @@ def evaluate(symbol: str, candles: list[dict[str, float]], structure: dict[str, 
     fee = float(lcfg.get("fee_per_side", settle.DEFAULT_FEE_PER_SIDE))
     max_bars = int(lcfg.get("max_settle_bars", 48))
     min_move = float(mqcfg.get("min_target_move", market_quality.DEFAULTS["min_target_move"]))
+    # re-entry cooldown: after a real loss on a coin, don't immediately re-buy it (anti revenge-trade
+    # / falling-knife re-entry — a direct fix for the negative-skew losses we measured).
+    cooldown_bars = int(lcfg.get("reentry_cooldown_bars", 3))
+    loss_thresh = float(lcfg.get("reentry_loss_threshold", -0.5))
 
     data = journal.load()
     open_entries = data["open"]
     stats = data["stats"]
     recent_live = data["recent_live"]
+    cooldowns = dict(data.get("cooldowns") or {})
 
     bar_ts = int(candles[-1].get("ts") or 0)
     oldest_ts = int(candles[0].get("ts") or 0)
+    # candle spacing (seconds) → converts the cooldown window into wall-clock
+    step = 3600
+    if len(candles) >= 2:
+        _s = int(candles[-1].get("ts") or 0) - int(candles[-2].get("ts") or 0)
+        if _s > 0:
+            step = _s
 
     # ── 1) settle open decisions for this symbol ─────────────────────────────────
     settled_notes: list[dict[str, Any]] = []
@@ -87,6 +98,8 @@ def evaluate(symbol: str, candles: list[dict[str, float]], structure: dict[str, 
             edge.update_stats(stats, e.get("bucket", "unknown"), res["r"])
             if e.get("kind") == "live":
                 recent_live.append(res["r"])
+            if res["r"] is not None and res["r"] <= loss_thresh:
+                cooldowns[symbol] = bar_ts  # just lost on this coin → cool off before re-entering
             settled_notes.append({"kind": e.get("kind"), "bucket": e.get("bucket"),
                                   "status": res["status"], "r": res["r"]})
         elif res["status"] == "open":
@@ -110,15 +123,23 @@ def evaluate(symbol: str, candles: list[dict[str, float]], structure: dict[str, 
     reason = ""
     conf_mult = 1.0
     if action == "BUY":
-        quality = market_quality.assess_quality(structure, regime, entry_px, target, stop, mqcfg)
-        if not quality["ok"]:
-            block, block_kind, reason = True, "quality", quality["reason"]
+        cd_ts = int(cooldowns.get(symbol, 0) or 0)
+        on_cooldown = cd_ts and 0 <= (bar_ts - cd_ts) < cooldown_bars * step
+        if on_cooldown:
+            bars_left = max(1, cooldown_bars - (bar_ts - cd_ts) // step)
+            block, block_kind = True, "cooldown"
+            reason = (f"re-entry cooldown: a recent {symbol} trade settled at a loss "
+                      f"(~{bars_left} bar(s) left) — not chasing it straight back")
         else:
-            gate = edge.decide(stats, bucket, recent_live, lcfg)
-            conf_mult = float(gate.get("conf_mult", 1.0))
-            reason = gate.get("reason", "")
-            if gate.get("action") == "block":
-                block, block_kind = True, "learned"
+            quality = market_quality.assess_quality(structure, regime, entry_px, target, stop, mqcfg)
+            if not quality["ok"]:
+                block, block_kind, reason = True, "quality", quality["reason"]
+            else:
+                gate = edge.decide(stats, bucket, recent_live, lcfg)
+                conf_mult = float(gate.get("conf_mult", 1.0))
+                reason = gate.get("reason", "")
+                if gate.get("action") == "block":
+                    block, block_kind = True, "learned"
 
     # ── 3) record this cycle's decision (dedup one per bar per symbol) ───────────
     already = any(int(e.get("ts") or 0) == bar_ts and e.get("symbol") == symbol
@@ -145,9 +166,13 @@ def evaluate(symbol: str, candles: list[dict[str, float]], structure: dict[str, 
             else:
                 recorded_kind = None
 
+    # keep only live (non-stale, non-future) cooldowns so the map stays small
+    cooldowns = {k: v for k, v in cooldowns.items()
+                 if 0 <= (bar_ts - int(v or 0)) < 7 * 86400}
     data["open"] = still_open
     data["stats"] = stats
     data["recent_live"] = recent_live
+    data["cooldowns"] = cooldowns
     journal.save(data)
 
     # ── scoreboards + human summary ──────────────────────────────────────────────

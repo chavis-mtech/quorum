@@ -111,6 +111,33 @@ def test_chop_market_blocks_buy(monkeypatch, tmp_path):
     assert info["block_kind"] == "quality"
 
 
+def test_reentry_cooldown_blocks_buy_right_after_a_loss(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUORUM_DATA_DIR", str(tmp_path))
+    cfg = _cfg()
+    consensus = {"action": "BUY", "regime": "trending"}
+
+    # cycle 1: record a live BUY at a high entry; stop just below
+    c1 = _candles(60)
+    price = c1[-1]["close"]
+    brain.evaluate("BTC", c1, _structure(price), consensus,
+                   _verdict(entry=price, target=price * 1.03, stop=price * 0.99),
+                   "trending", False, cfg)
+
+    # cycle 2: next bar gaps down through the stop → the trade settles as a loss (≤ -0.5R),
+    # which arms the re-entry cooldown
+    entry_ts = c1[-1]["ts"]
+    crash = [{"ts": entry_ts + STEP, "open": price, "high": price * 1.001,
+              "low": price * 0.97, "close": price * 0.975, "volume": 11.0}]
+    c2 = c1 + crash
+    p2 = c2[-1]["close"]
+    info2 = brain.evaluate("BTC", c2, _structure(p2), consensus,
+                           _verdict(entry=p2, target=p2 * 1.03, stop=p2 * 0.98),
+                           "trending", False, cfg)
+    # a fresh BUY on BTC in the same/next bar must be blocked by the cooldown
+    assert info2["block"] is True
+    assert info2["block_kind"] == "cooldown"
+
+
 def test_synthetic_data_skips_learning(monkeypatch, tmp_path):
     monkeypatch.setenv("QUORUM_DATA_DIR", str(tmp_path))
     info = brain.evaluate("BTC", _candles(60), _structure(100.0), {"action": "BUY"},
