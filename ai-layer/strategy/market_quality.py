@@ -26,8 +26,8 @@ DEFAULTS = {
     "chop_er": 0.12,           # Efficiency Ratio below this...
     "chop_adx": 18.0,          # ...and ADX below this = pure chop → no trade
     "flat_atr_pct": 0.003,     # ATR < 0.3% of price = market not moving → fees dominate
-    "min_liquidity_thb": 50000.0,  # median THB traded per bar; below this the book is too thin
-    "max_atr_pct": 0.025,      # ATR > 2.5% per bar = too wild for a fixed stop → noise stops you out
+    "min_liquidity_thb": 15000.0,  # median THB traded per bar; below this the book is too thin to exit
+    "max_atr_pct": 0.04,       # ATR > 4% per bar = too wild even for the -6% cap (1.5×ATR stop hits it)
 }
 
 
