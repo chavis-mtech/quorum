@@ -48,6 +48,28 @@ def test_ranging_buy_now_produces_a_tradeable_plan():
     assert rr >= _MIN_REWARD_RISK, f"RR {rr:.2f} must clear backend floor {_MIN_REWARD_RISK}"
 
 
+def test_uptrend_breakout_target_unblocks_buy_near_resistance():
+    # price just under resistance: capping target AT resistance gives RR<floor → HOLD.
+    # In a confirmed uptrend the planner now projects the target a measured step ABOVE
+    # resistance (res + ATR for trending) so the proven-winner setup clears the RR bar.
+    # support far → stop = 1.5*ATR (tight); res only ~3.3% up.
+    ctx = _ctx(price=100.0, atr_pct=0.02, support=90.0, resistance=103.3, regime="trending")
+    v = _plan_from_consensus(_consensus(regime="trending"), "test", ctx)
+    assert v["action"] == "BUY", "confirmed uptrend near resistance must now be tradeable"
+    entry, target, stop = v["entry_price"], v["target_price"], v["stop_price"]
+    assert target > 103.3, "target should project above resistance in a confirmed uptrend"
+    assert (target - entry) / (entry - stop) >= _MIN_REWARD_RISK
+
+
+def test_ranging_still_caps_target_at_resistance():
+    # the mean-reversion discipline must stay: a RANGE never projects past the range top,
+    # so the same near-resistance geometry stays HOLD (RR<floor) in a ranging regime.
+    ctx = _ctx(price=100.0, atr_pct=0.02, support=90.0, resistance=103.3, regime="ranging")
+    v = _plan_from_consensus(_consensus(regime="ranging"), "test", ctx)
+    if v["action"] == "BUY":
+        assert v["target_price"] <= 103.3 + 1e-6, "ranging target must stay capped at resistance"
+
+
 def test_planned_stop_never_wider_than_catastrophic_cap():
     # a low support (would imply a ~-9% stop) must be clamped to ≥ -5.5%
     ctx = _ctx(price=100.0, atr_pct=0.04, support=91.0, resistance=112.0, regime="trending")
