@@ -565,7 +565,7 @@ def _plan_from_consensus(consensus: dict[str, Any], note: str, ctx: dict[str, An
 
     # Regime-aware RR threshold. Ranging/choppy conditions require more payoff because false
     # breakouts and round-trip fees consume a larger share of the available move.
-    rr_required = {"trending": 1.5, "weak-trend": 2.0, "ranging": 2.5}.get(regime, 1.5)
+    rr_required = {"trending": 1.4, "weak-trend": 1.45, "ranging": 1.5}.get(regime, 1.4)
 
     base: dict[str, Any] = {
         "action": action, "confidence": conf, "thesis": note,

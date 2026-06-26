@@ -1,10 +1,4 @@
-"""Tests for the rule-based planner RR + stop clamp — the fix that makes the proven edge tradeable.
-
-The self-learning brain proved the edge (ranging|up|mid 74% win) at RR≈1.6-1.7, but the old planner
-demanded RR≥2.5 in a ranging market and so HOLD'd every winner. These lock in:
-  • a ranging BUY now produces a real plan whose RR clears the backend's hard MIN_REWARD_RISK=1.35
-  • the planned stop is never wider than the backend's −6% catastrophic cap (no planned-vs-realized skew)
-"""
+"""Tests for conservative regime-aware RR, stop clamping, and portfolio limits."""
 from __future__ import annotations
 
 import sys
@@ -39,7 +33,8 @@ def _consensus(action="BUY", conf=0.6, regime="ranging"):
 
 
 def test_ranging_buy_now_produces_a_tradeable_plan():
-    # ranging market with room to a resistance well above price → used to HOLD at RR<2.5
+    # ranging floor re-tuned to 1.5 (was 2.5, which HOLD'd the proven edge). With room to a far
+    # resistance the plan now clears both the regime floor and the backend MIN_REWARD_RISK.
     ctx = _ctx(price=100.0, atr_pct=0.02, support=97.0, resistance=110.0, regime="ranging")
     v = _plan_from_consensus(_consensus(regime="ranging"), "test", ctx)
     assert v["action"] == "BUY"
@@ -70,6 +65,14 @@ def test_ranging_still_caps_target_at_resistance():
         assert v["target_price"] <= 103.3 + 1e-6, "ranging target must stay capped at resistance"
 
 
+def test_ranging_buy_is_held_when_rr_below_the_floor():
+    # resistance close above price → ranging caps target at resistance → RR < 1.5 floor → HOLD.
+    ctx = _ctx(price=100.0, atr_pct=0.02, support=97.0, resistance=103.3, regime="ranging")
+    v = _plan_from_consensus(_consensus(regime="ranging"), "test", ctx)
+    assert v["action"] == "HOLD"
+    assert "1.5" in v["reasoning"] and "RR" in v["reasoning"]
+
+
 def test_planned_stop_never_wider_than_catastrophic_cap():
     # a low support (would imply a ~-9% stop) must be clamped to ≥ -5.5%
     ctx = _ctx(price=100.0, atr_pct=0.04, support=91.0, resistance=112.0, regime="trending")
@@ -77,3 +80,26 @@ def test_planned_stop_never_wider_than_catastrophic_cap():
     if v["action"] == "BUY":
         assert v["stop_price"] >= 100.0 * (1.0 - 0.055) - 1e-6, \
             f"planned stop {v['stop_price']} must not be wider than -5.5%"
+
+
+def test_account_loss_limit_replaces_old_fixed_six_percent_halt():
+    ctx = _ctx(price=100.0, atr_pct=0.02, support=97.0, resistance=110.0, regime="ranging")
+    ctx["portfolio"] = {
+        "session_pnl_pct": -14.8,
+        "loss_limit_pct": 80.0,
+        "deployed_pct": 0.0,
+    }
+    v = _plan_from_consensus(_consensus(regime="ranging"), "test", ctx)
+    assert v["action"] == "BUY", "drawdown is still inside this account's configured 80% limit"
+
+
+def test_configured_loss_limit_still_halts_new_buys():
+    ctx = _ctx(price=100.0, atr_pct=0.02, support=97.0, resistance=110.0, regime="ranging")
+    ctx["portfolio"] = {
+        "session_pnl_pct": -14.8,
+        "loss_limit_pct": 10.0,
+        "deployed_pct": 0.0,
+    }
+    v = _plan_from_consensus(_consensus(regime="ranging"), "test", ctx)
+    assert v["action"] == "HOLD"
+    assert "configured limit=-10.0%" in v["reasoning"]
