@@ -20,7 +20,7 @@ from typing import Any
 # stays focused on LLM/provider plumbing. _apply_entry_discipline is re-exported under its old
 # name so tests/imports that reference judge._apply_entry_discipline keep working.
 from strategy.entry_discipline import apply_entry_discipline as _apply_entry_discipline
-from strategy.trend_gate import apply_trend_gate as _apply_trend_gate
+from strategy.trend_gate import apply_trend_gate as _apply_trend_gate, trend_direction
 
 _OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "120s")
 _JSON_RE = re.compile(r"\{.*\}", re.S)
@@ -580,11 +580,22 @@ def _plan_from_consensus(consensus: dict[str, Any], note: str, ctx: dict[str, An
         if risk <= 0:
             return _discipline(base, ctx, consensus)
 
-        # check RR by regime
-        max_target = res if res > price else price + rr_required * 1.2 * risk
+        # Target ceiling depends on regime + trend direction. In a RANGE the edge is
+        # mean-reversion → cap the target at the range top (resistance_20). In a confirmed
+        # UPtrend, resistance_20 is just the recent high a breakout clears — hard-capping there
+        # throttles momentum setups to RR<floor and is exactly why the proven-winner buckets
+        # (the brain measured ranging|up & weak-trend|up at RR≈1.6-1.7 on ATR-projected targets)
+        # could never trade live. Give a confirmed UPtrend a measured breakout projection above
+        # resistance so those setups clear the RR bar. Stop is unchanged → per-trade risk is
+        # identical; this only opens upside headroom for setups already learned to win.
+        tdir = trend_direction(s)
         target = price + max(rr_required * risk * 1.1, 2.0 * atr)
         if res > price:
-            target = min(target, res)
+            if regime in ("trending", "weak-trend") and tdir == "up":
+                headroom = (1.0 if regime == "trending" else 0.5) * atr
+                target = min(target, res + headroom)
+            else:
+                target = min(target, res)
         rr = (target - price) / risk
 
         if rr < rr_required:
