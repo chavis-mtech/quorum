@@ -49,6 +49,19 @@ def _extract_json(text: str) -> dict[str, Any]:
         return {}
 
 
+def _portfolio_loss_limit(pf: dict[str, Any] | None) -> float:
+    """Configured account loss limit in percentage points.
+
+    Older callers do not send it, so retain the legacy 6% fallback. A non-positive value is
+    invalid for a hard-stop threshold and also falls back safely.
+    """
+    try:
+        value = float((pf or {}).get("loss_limit_pct", 6.0))
+    except (TypeError, ValueError):
+        return 6.0
+    return value if value > 0.0 else 6.0
+
+
 _SYSTEM = """\
 You are a professional hedge-fund-level crypto trader — with iron discipline, careful risk management, and a focus on long-term profitability.
 You receive data from multiple AI agents (technical, trend_ml, sentiment, news) and must produce a single JSON decision.
@@ -77,10 +90,19 @@ You receive data from multiple AI agents (technical, trend_ml, sentiment, news) 
 • weak-trend (ER 0.20-0.35):    RR ≥ 1.45:1
 • ranging    (ER<0.20, ADX<20): RR ≥ 1.5:1 (if not achievable → always HOLD)
 Never widen stop just to engineer an RR ratio — if RR does not meet regime threshold → HOLD.
+TARGET PLACEMENT (critical — this is what lets a good trend actually trade):
+• In a CONFIRMED UPTREND (trending / weak-trend, price making higher highs) resistance_20 is just
+  the recent high a breakout clears — you MAY place the target a measured step ABOVE it
+  (≈ resistance + 1×ATR). Do NOT cap the target at the recent high when momentum is clearly up;
+  capping there forfeits the move and forces a needless HOLD.
+• In a RANGE, do the opposite — cap the target at the range top (resistance_20); the edge is
+  mean-reversion, so never project a breakout you don't expect.
 
 ━━━━━━ Portfolio risk management rules (iron) ━━━━━━
 • session_pnl < -3%:   halve suggested_size_pct (still losing → trade light).
-• session_pnl < -6%:   HOLD all new positions (hit dangerous daily loss limit → stop trading).
+• session_pnl <= -configured_loss_limit_pct: HOLD all new positions.
+• The configured loss limit is supplied in PORTFOLIO STATUS. Never invent a fixed -6% limit;
+  the backend risk governor is authoritative for the user's account.
 • portfolio_deployed > 70%: HOLD new positions (little capital remaining).
 • portfolio_deployed > 85%: HOLD absolutely (near full capital deployment).
 
@@ -156,17 +178,25 @@ def _build_prompt(consensus: dict[str, Any], ctx: dict[str, Any], web: list[str]
     pf_txt = ""
     if pf:
         spnl = float(pf.get("session_pnl_pct", 0.0))
+        loss_limit = _portfolio_loss_limit(pf)
         dep = float(pf.get("deployed_pct", 0.0))
         cash = float(pf.get("cash_thb", 0.0))
         pf_txt = (
             f"\n═══ PORTFOLIO STATUS ═══\n"
-            f"Session P&L: {spnl:+.1f}% · Deployed: {dep:.0f}% · Cash: {cash:,.0f} THB\n"
+            f"Session P&L: {spnl:+.1f}% · Configured loss limit: -{loss_limit:.1f}% · "
+            f"Deployed: {dep:.0f}% · Cash: {cash:,.0f} THB\n"
         )
         # warn judge if in a dangerous state
-        if spnl < -6:
-            pf_txt += "⚠️ SESSION P&L BELOW -6% → must be HOLD unless SELL to reduce position\n"
+        if spnl <= -loss_limit:
+            pf_txt += (
+                f"⚠️ SESSION P&L HIT THE CONFIGURED -{loss_limit:.1f}% LIMIT "
+                "→ must be HOLD unless SELL to reduce position\n"
+            )
         elif spnl < -3:
-            pf_txt += "⚠️ Session negative > 3% → halve position size\n"
+            pf_txt += (
+                "⚠️ Session is down more than 3%, but remains inside the configured loss limit "
+                "→ halve position size; do not force HOLD solely because an old fixed -6% rule was crossed\n"
+            )
         if dep > 85:
             pf_txt += "⚠️ Deployed >85% → absolute HOLD for new positions\n"
         elif dep > 70:
@@ -533,11 +563,9 @@ def _plan_from_consensus(consensus: dict[str, Any], note: str, ctx: dict[str, An
     regime = consensus.get("regime", "unknown")
     err_txt = ("\n⚠️ LLM unavailable reason: " + " | ".join(errors)) if errors else ""
 
-    # Regime-aware RR threshold — lowered to the RR the self-learning brain proved the edge at
-    # (ranging|up|mid 74% win / weak-trend|up|mid 75% win were measured at RR≈1.6-1.7). The old
-    # 2.0/2.5 floors HOLD'd those winners every time so the proven edge could never trade live.
-    # All ≥1.4 → produced plans still clear the backend's hard MIN_REWARD_RISK=1.35 (no recompile).
-    rr_required = {"trending": 1.4, "weak-trend": 1.45, "ranging": 1.5}.get(regime, 1.4)
+    # Regime-aware RR threshold. Ranging/choppy conditions require more payoff because false
+    # breakouts and round-trip fees consume a larger share of the available move.
+    rr_required = {"trending": 1.5, "weak-trend": 2.0, "ranging": 2.5}.get(regime, 1.5)
 
     base: dict[str, Any] = {
         "action": action, "confidence": conf, "thesis": note,
@@ -558,15 +586,17 @@ def _plan_from_consensus(consensus: dict[str, Any], note: str, ctx: dict[str, An
     # portfolio-aware sizing
     pf = ctx.get("portfolio") or {}
     spnl = float(pf.get("session_pnl_pct", 0.0))
+    loss_limit = _portfolio_loss_limit(pf)
     dep = float(pf.get("deployed_pct", 0.0))
 
     if action == "BUY":
         # Block if portfolio is not suitable
-        if spnl < -6 or dep > 85:
+        if spnl <= -loss_limit or dep > 85:
             base["action"] = "HOLD"
             base["reasoning"] = (
                 f"{note}. rule-based planner blocked BUY: "
-                f"session P&L={spnl:+.1f}% / deployed={dep:.0f}%{err_txt}"
+                f"session P&L={spnl:+.1f}% / configured limit=-{loss_limit:.1f}% / "
+                f"deployed={dep:.0f}%{err_txt}"
             )
             return _discipline(base, ctx, consensus)
 
