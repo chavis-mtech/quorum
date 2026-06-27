@@ -264,6 +264,11 @@ pub trait HistoryRepository: Send + Sync {
         decision_id: i64,
         raw: &serde_json::Value,
     ) -> DomainResult<()>;
+    /// Mark a previously-saved decision as having produced a filled order.
+    async fn mark_executed(&self, decision_id: i64, note: &str) -> DomainResult<()> {
+        let _ = (decision_id, note);
+        Ok(())
+    }
     async fn recent_decisions(
         &self,
         account_id: i64,

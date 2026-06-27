@@ -66,3 +66,66 @@ def settle_long(
         return {"status": "expired", "exit": last_close,
                 "r": round(_net_r(entry, last_close, risk, fee_per_side), 4), "bars_held": held}
     return {"status": "open", "exit": None, "r": None, "bars_held": held}
+
+
+def settle_planned_long(
+    entry_type: str,
+    entry: float,
+    target: float,
+    stop: float,
+    bars: list[dict[str, float]],
+    *,
+    max_entry_bars: int = 12,
+    max_bars: int = 48,
+    fee_per_side: float = DEFAULT_FEE_PER_SIDE,
+) -> dict[str, Any]:
+    """Settle a MARKET or LIMIT plan without inventing fills."""
+    kind = (entry_type or "market").strip().lower()
+    if kind != "limit":
+        return settle_long(
+            entry, target, stop, bars, max_bars=max_bars, fee_per_side=fee_per_side
+        )
+
+    risk = entry - stop
+    if risk <= 0 or entry <= 0 or target <= entry:
+        return {"status": "invalid", "exit": None, "r": None, "bars_held": 0}
+
+    pending_bars = min(len(bars), max_entry_bars)
+    for i, candle in enumerate(bars[:max_entry_bars]):
+        low = float(candle.get("low", 0.0))
+        high = float(candle.get("high", 0.0))
+        if low > 0 and low <= entry:
+            settled = settle_long(
+                entry,
+                target,
+                stop,
+                bars[i:],
+                max_bars=max_bars,
+                fee_per_side=fee_per_side,
+            )
+            settled["entry_wait_bars"] = i + 1
+            return settled
+        if high > 0 and high >= target:
+            return {
+                "status": "missed",
+                "exit": None,
+                "r": None,
+                "bars_held": 0,
+                "entry_wait_bars": i + 1,
+            }
+
+    if len(bars) >= max_entry_bars:
+        return {
+            "status": "missed",
+            "exit": None,
+            "r": None,
+            "bars_held": 0,
+            "entry_wait_bars": pending_bars,
+        }
+    return {
+        "status": "pending",
+        "exit": None,
+        "r": None,
+        "bars_held": 0,
+        "entry_wait_bars": pending_bars,
+    }

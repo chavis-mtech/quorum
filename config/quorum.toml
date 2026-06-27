@@ -27,7 +27,7 @@ news       = true       # ชั้นตรวจข่าววิกฤต + 
 [consensus]
 # "เอาแนวคิดที่ค่อนข้างจะตรงกัน" = ปรับ threshold ตรงนี้
 min_agreement  = 3      # ต้องมี agent อย่างน้อยกี่ตัวเห็นตรงกัน (ลดเป็น 2 ถ้าอยากให้เข้าไม้บ่อยขึ้น)
-min_confidence = 0.52   # BUY bar = +0.03 = 0.55 → รับ setup ที่ชนะ (สมองพิสูจน์แล้ว) ที่ cluster ~0.55
+min_confidence = 0.52   # BUY bar = +0.03 = 0.55 → รับ setup ที่ชนะ (cluster ~0.55); 0.60 รัดจนไม่เข้าไม้
 # น้ำหนักเริ่มต้นของแต่ละ agent (จะถูกคูณกับ confidence)
 [consensus.weights]
 technical  = 1.0
@@ -65,19 +65,23 @@ max_articles = 20
 enabled            = true
 fee_per_side       = 0.0025  # ค่าธรรมเนียม Bitkub ต่อข้าง (~0.25%) — ใช้คิด R สุทธิหลังหักค่าธรรมเนียม
 max_settle_bars    = 48      # ถือสูงสุดกี่แท่งก่อน mark-to-market
+max_entry_bars     = 12      # limit ต้องแตะจุดเข้าภายในกี่แท่ง มิฉะนั้นเป็น missed ไม่ใช่ win
 min_samples_gate   = 6       # ต้องมีผลอย่างน้อยกี่ไม้ก่อนจะ "บล็อก" setup ได้ (ตัดไม้แพ้ไวขึ้น)
 block_expectancy   = -0.08   # ถ้า avg R ของ setup ต่ำกว่านี้ = ขาดทุนซ้ำ → บล็อก
 block_winrate_n    = 8       # ถ้ามีผล ≥ จำนวนนี้ และชนะ < 34% → บล็อก
 breaker_expectancy = -0.15   # ถ้า live ล่าสุดขาดทุนเฉลี่ยต่ำกว่านี้ → โหมดตั้งรับ (เทรดเฉพาะ setup ที่พิสูจน์แล้ว)
-conf_hi            = 1.25     # boost ความมั่นใจสูงสุดของ setup ที่ชนะ (ให้ผ่านเกณฑ์ backend ได้)
+conf_hi            = 1.15     # boost แบบจำกัด เฉพาะ setup ที่มีผลจริงรองรับ
+require_proven_edge = false    # false = เทรดได้เลย (ยังบล็อกไม้แพ้ที่พิสูจน์แล้วผ่าน block_expectancy/winrate); true = รอ shadow พิสูจน์ก่อน → อาจไม่เข้าไม้หลายวัน
+min_live_samples    = 12       # ต้องมีผลที่ fill จริงอย่างน้อยเท่านี้ก่อนปลดล็อก live
+min_live_expectancy = 0.05     # expectancy หลัง fee ต้อง ≥ +0.05R
 reentry_cooldown_bars   = 3    # หลังเหรียญหนึ่งขาดทุน ห้ามรีบซื้อซ้ำกี่แท่ง (กัน revenge-trade)
 reentry_loss_threshold  = -0.5 # ขาดทุน ≤ ค่านี้ (R) ถึงจะเริ่มนับ cooldown (ไม้แพ้เล็กๆ ไม่นับ)
 
 [market_quality]
 # กันไม่ให้เทรด "ตลาดที่ชนะไม่ได้" (เหรียญบาง/ผันผวนเกิน/sideways/แทบไม่ขยับ/เป้าใกล้จนค่าธรรมเนียมกิน)
 enabled           = true
-min_liquidity_thb = 15000.0  # มูลค่าซื้อขายต่อแท่ง (THB) ต่ำกว่านี้ = บางจนออกของไม่ได้ → ไม่เข้า (คลายให้เล่นเหรียญเล็ก)
-max_atr_pct       = 0.04     # ATR เกิน 4%/แท่ง = ผันผวนเกินแม้แต่เพดาน -6% (stop 1.5×ATR ชน) → ไม่เข้า
+min_liquidity_thb = 15000.0  # คลายให้เล่นเหรียญเล็กลงได้ (50k บล็อกเหรียญส่วนใหญ่บน Bitkub) — ยังกันตัวบางสุด
+max_atr_pct       = 0.04     # ATR เกิน 4%/แท่ง = ผันผวนเกิน (1.5×ATR stop = เพดาน -6%) → ไม่เข้า
 min_target_move   = 0.012    # เป้าต้องห่างจากจุดเข้าอย่างน้อย ~1.2% (ให้พ้นค่าธรรมเนียมไป-กลับ ~0.5%)
 min_net_rr        = 1.2      # reward:risk หลังหักค่าธรรมเนียมต้อง ≥ ค่านี้
 chop_er           = 0.12     # Efficiency Ratio ต่ำกว่านี้...

@@ -60,3 +60,18 @@ def test_circuit_breaker_still_allows_proven_positive_bucket():
     stats = {"trending|up|mid": {"n": 10, "wins": 8, "sum_r": 5.0}}  # +0.5R, proven
     d = edge.decide(stats, "trending|up|mid", recent_live)
     assert d["action"] == "allow"
+
+
+def test_shadow_first_requires_positive_fill_aware_evidence():
+    cfg = {
+        "require_proven_edge": True,
+        "min_live_samples": 12,
+        "min_live_expectancy": 0.05,
+    }
+    d = edge.decide({}, "ranging|up|mid", [], cfg)
+    assert d["action"] == "block"
+    assert "shadow-first" in d["reason"]
+
+    stats = {"ranging|up|mid": {"n": 12, "wins": 7, "sum_r": 1.2}}
+    d2 = edge.decide(stats, "ranging|up|mid", [], cfg)
+    assert d2["action"] == "allow"

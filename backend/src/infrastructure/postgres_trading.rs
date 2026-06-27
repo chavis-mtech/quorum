@@ -814,7 +814,7 @@ impl PlanRepository for PgStore {
                  quote=$3, state=$4, action=$5, entry_type=$6, entry_price=$7, target_price=$8,
                  stop_price=$9, confidence=$10, thesis=$11, invalidation=$12, next_step=$13,
                  decision_id=$14, last_price=$15, high_water_mark=$16, initial_stop=$17,
-                 trail_active=$18, updated_at=now()
+                 trail_active=$18, created_at=now(), updated_at=now()
                RETURNING id"#,
         )
         .bind(p.account_id)

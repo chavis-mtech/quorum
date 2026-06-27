@@ -28,9 +28,17 @@ use crate::domain::ports::{
 const QUOTE: &str = "THB";
 const MIN_REWARD_RISK: f64 = 1.35;
 const MAX_PENDING_PLAN_AGE_HOURS: i64 = 12;
+/// A plan that reaches its entry shortly after the analysis is still the same signal. Re-running
+/// a non-deterministic LLM seconds later made valid BUY plans flip to HOLD and cancelled every
+/// order. Fresh plans execute from the already-validated persisted levels; older plans still get
+/// a full confirmation analysis before risking capital.
+const FRESH_PLAN_DIRECT_EXEC_MINUTES: i64 = 30;
 /// Limit entry price must not be more than this fraction below market — prevents "dead plans" waiting for a
 /// distant pullback that will never trigger (e.g. waiting for −31%). If farther than this, skip plan and wait for a closer setup instead
 const MAX_ENTRY_DISTANCE_PCT: f64 = 0.05;
+/// A limit at/above the current market is marketable, not a real pullback. Treat tiny rounding
+/// differences (up to 0.1%) as immediate entry rather than creating a plan that triggers seconds later.
+const MARKETABLE_LIMIT_TOLERANCE_PCT: f64 = 0.001;
 const RESCUE_TAKE_PROFIT_PCT: f64 = 0.04;
 const RESCUE_STOP_LOSS_PCT: f64 = 0.025;
 
@@ -91,6 +99,23 @@ fn validate_long_plan(entry: f64, target: f64, stop: f64) -> Result<f64, String>
         )),
         None => Err("entry/target/stop levels are not valid for a long plan".into()),
     }
+}
+
+fn should_enter_immediately(
+    entry_type: &str,
+    entry_price: f64,
+    market_price: f64,
+    confidence: f64,
+    min_confidence: f64,
+) -> bool {
+    if confidence < min_confidence {
+        return false;
+    }
+    entry_type == "market"
+        || entry_price <= 0.0
+        || (entry_type == "limit"
+            && market_price > 0.0
+            && entry_price >= market_price * (1.0 - MARKETABLE_LIMIT_TOLERANCE_PCT))
 }
 
 /// Compute the new (ratcheted) stop for an open long position using R-multiple management.
@@ -288,6 +313,7 @@ impl TradingService {
         let pf = self.portfolio_snapshot(account_id, settings.mode, QUOTE).await;
         cfg["portfolio"] = json!({
             "session_pnl_pct": (pf.session_pnl_pct * 100.0 * 10.0).round() / 10.0,
+            "loss_limit_pct": (settings.daily_loss_limit * 100.0 * 10.0).round() / 10.0,
             "deployed_pct":    (pf.deployed_pct * 100.0 * 10.0).round() / 10.0,
             "cash_thb":        (pf.cash_thb * 100.0).round() / 100.0,
             "equity":          (pf.equity * 100.0).round() / 100.0,
@@ -538,8 +564,13 @@ impl TradingService {
         // ----- not holding: decide entry timing -----
         match v.action {
             Action::Buy => {
-                let enter_now = (v.entry_type == "market" || v.entry_price <= 0.0)
-                    && v.confidence >= s.min_confidence;
+                let enter_now = should_enter_immediately(
+                    &v.entry_type,
+                    v.entry_price,
+                    price,
+                    v.confidence,
+                    s.min_confidence,
+                );
                 if enter_now {
                     self.enter_now(account_id, a, s, decision_id, price).await;
                 } else if v.entry_price > 0.0 {
@@ -548,11 +579,9 @@ impl TradingService {
                 }
             }
             _ => {
-                if v.entry_price > 0.0 && v.action != Action::Sell {
-                    self.track_pending(account_id, a, s, decision_id, price)
-                        .await
-                        .ok();
-                } else if let Ok(Some(p)) = self.plans.get(account_id, &a.symbol).await {
+                // HOLD/SELL must never create a buy plan even if an LLM returned leftover entry
+                // levels in its JSON. Only the explicit BUY branch above may schedule an entry.
+                if let Ok(Some(p)) = self.plans.get(account_id, &a.symbol).await {
                     if matches!(p.state, PlanState::Pending) {
                         self.plans
                             .set_state(account_id, &a.symbol, PlanState::Cancelled)
@@ -587,7 +616,10 @@ impl TradingService {
             );
             return Ok(());
         }
-        match self.validate_trackable_plan(a, s, price) {
+        // A pending entry is still an executable intent, so require the exact same BUY +
+        // consensus checks as an immediate order. This rejects HOLD verdicts that happen to
+        // contain stale entry/target/stop fields.
+        match self.validate_executable_long(a, s, price) {
             Ok(rr) => {
                 let plan = self.build_plan(
                     account_id,
@@ -889,9 +921,103 @@ impl TradingService {
                 continue;
             }
             if p.entry_price > 0.0 && price <= p.entry_price {
-                tracing::info!("reached entry level for {} at {} → confirming with analysis", p.symbol, price);
-                self.confirm_and_enter(account_id, &p, settings, price)
-                    .await;
+                if plan_age <= ChronoDuration::minutes(FRESH_PLAN_DIRECT_EXEC_MINUTES) {
+                    tracing::info!(
+                        "reached entry level for fresh plan {} at {} → executing validated plan",
+                        p.symbol,
+                        price
+                    );
+                    self.execute_pending_plan(account_id, &p, settings, price)
+                        .await;
+                } else {
+                    tracing::info!(
+                        "reached entry level for older plan {} at {} → confirming with analysis",
+                        p.symbol,
+                        price
+                    );
+                    self.confirm_and_enter(account_id, &p, settings, price)
+                        .await;
+                }
+            }
+        }
+    }
+
+    async fn execute_pending_plan(
+        &self,
+        account_id: i64,
+        p: &TradePlan,
+        settings: &TradingSettings,
+        price: f64,
+    ) {
+        if p.confidence < settings.min_confidence {
+            tracing::info!(
+                "fresh plan for {} no longer meets account confidence: {:.2} < {:.2} → cancelling",
+                p.symbol,
+                p.confidence,
+                settings.min_confidence
+            );
+            self.plans
+                .set_state(account_id, &p.symbol, PlanState::Cancelled)
+                .await
+                .ok();
+            return;
+        }
+        let rr = match validate_long_plan(price, p.target_price, p.stop_price) {
+            Ok(rr) => rr,
+            Err(reason) => {
+                tracing::info!(
+                    "fresh plan for {} is invalid at trigger price {}: {reason} → cancelling",
+                    p.symbol,
+                    price
+                );
+                self.plans
+                    .set_state(account_id, &p.symbol, PlanState::Cancelled)
+                    .await
+                    .ok();
+                return;
+            }
+        };
+        match self
+            .execute(
+                account_id,
+                &p.symbol,
+                &p.quote,
+                Action::Buy,
+                settings.trade_amount_quote,
+                settings.mode,
+                p.decision_id,
+            )
+            .await
+        {
+            Ok(_) => {
+                let now = Utc::now();
+                let mut open = p.clone();
+                open.state = PlanState::Open;
+                open.entry_type = "market".into();
+                open.entry_price = price;
+                open.last_price = price;
+                open.high_water_mark = price;
+                open.initial_stop = p.stop_price;
+                open.trail_active = false;
+                open.created_at = now;
+                open.updated_at = now;
+                self.plans.upsert(&open).await.ok();
+                tracing::info!(
+                    "entered fresh validated plan for {} at {} (RR {:.2})",
+                    p.symbol,
+                    price,
+                    rr
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "failed to execute fresh planned buy for {}: {e} → cancelling plan",
+                    p.symbol
+                );
+                self.plans
+                    .set_state(account_id, &p.symbol, PlanState::Cancelled)
+                    .await
+                    .ok();
             }
         }
     }
@@ -2191,6 +2317,23 @@ impl TradingService {
             .await;
             return Err(DomainError::Broker(trade.note));
         }
+        if let Some(did) = decision_id {
+            if let Err(e) = self
+                .repo
+                .mark_executed(
+                    did,
+                    &format!(
+                        "{} order filled for {} at {:.8}",
+                        side.as_str(),
+                        symbol,
+                        fill_price
+                    ),
+                )
+                .await
+            {
+                tracing::warn!(decision_id = did, "failed to mark decision executed: {e}");
+            }
+        }
         Ok(trade)
     }
 
@@ -2262,6 +2405,14 @@ mod tests {
         assert!(validate_long_plan(100.0, 102.0, 98.0).is_err());
         assert!(validate_long_plan(100.0, 99.0, 96.0).is_err());
         assert!(validate_long_plan(100.0, 106.0, 101.0).is_err());
+    }
+
+    #[test]
+    fn marketable_limit_enters_immediately_instead_of_double_confirming() {
+        assert!(should_enter_immediately("limit", 100.0, 100.0, 0.60, 0.45));
+        assert!(should_enter_immediately("limit", 99.95, 100.0, 0.60, 0.45));
+        assert!(!should_enter_immediately("limit", 98.5, 100.0, 0.60, 0.45));
+        assert!(!should_enter_immediately("market", 0.0, 100.0, 0.40, 0.45));
     }
 
     // ---- managed_stop (trailing / breakeven), conservative preset: breakeven_r=0.7, activate_r=1.0, trail_r=1.0 ----

@@ -165,6 +165,16 @@ impl HistoryRepository for PgStore {
         Ok(())
     }
 
+    async fn mark_executed(&self, decision_id: i64, note: &str) -> DomainResult<()> {
+        sqlx::query("UPDATE decisions SET executed=TRUE, note=$2 WHERE id=$1")
+            .bind(decision_id)
+            .bind(note)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| DomainError::Repo(e.to_string()))?;
+        Ok(())
+    }
+
     async fn recent_decisions(
         &self,
         account_id: i64,

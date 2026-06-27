@@ -16,11 +16,12 @@ import json
 import os
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
 _LOCK = threading.RLock()
-_VERSION = 1
+_VERSION = 2
 # keep the file bounded
 _MAX_OPEN = 600          # open (unsettled) decisions retained
 _MAX_RECENT_LIVE = 40    # rolling window for the portfolio circuit breaker
@@ -55,6 +56,16 @@ def load() -> dict[str, Any]:
                 data = json.load(f)
             if not isinstance(data, dict):
                 return _empty()
+            # v1 treated LIMIT plans as filled immediately. Preserve it for audit, but rebuild
+            # clean fill-aware statistics instead of trusting contaminated expectancy.
+            version = int(data.get("version", 1) or 1)
+            if version < _VERSION:
+                backup = p.with_name(f"brain.v{version}.invalid-{int(time.time())}.json")
+                try:
+                    os.replace(p, backup)
+                except OSError:
+                    pass
+                return _empty()
             data.setdefault("version", _VERSION)
             data.setdefault("open", [])
             data.setdefault("stats", {})
@@ -69,6 +80,7 @@ def save(data: dict[str, Any]) -> bool:
     """Atomically persist state; never raises — returns False on failure."""
     with _LOCK:
         try:
+            data["version"] = _VERSION
             # bound the growth
             if len(data.get("open", [])) > _MAX_OPEN:
                 data["open"] = data["open"][-_MAX_OPEN:]

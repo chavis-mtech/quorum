@@ -34,6 +34,9 @@ DEFAULTS = {
     "conf_span": 0.5,           # confidence multiplier = clamp(1 + exp*span, lo, hi)
     "conf_lo": 0.75,
     "conf_hi": 1.25,            # let a strongly-proven winner clear the backend confidence floor
+    "require_proven_edge": False,
+    "min_live_samples": 12,
+    "min_live_expectancy": 0.05,
 }
 
 
@@ -116,6 +119,20 @@ def decide(
             "action": "block", "conf_mult": 1.0, "defensive": True, "edge": st,
             "reason": (f"defensive mode: last {rl_n} live trades {rl_exp:+.2f}R — pausing unproven "
                        f"setup [{bucket}] (n={n}, exp={exp:+.2f}R) until results recover"),
+        }
+
+    # Shadow-first: do not use real money to explore an unproven bucket. It remains shadow-tracked
+    # and unlocks automatically after enough fill-aware, fee-adjusted observations are positive.
+    if c["require_proven_edge"] and (
+        n < c["min_live_samples"] or exp < c["min_live_expectancy"]
+    ):
+        return {
+            "action": "block", "conf_mult": 1.0, "defensive": defensive, "edge": st,
+            "reason": (
+                f"shadow-first: setup [{bucket}] has n={n}/{c['min_live_samples']} and "
+                f"expectancy {exp:+.2f}R (need ≥{c['min_live_expectancy']:+.2f}R) — "
+                "collecting fill-aware evidence before risking live capital"
+            ),
         }
 
     # confidence nudge for buckets with some history

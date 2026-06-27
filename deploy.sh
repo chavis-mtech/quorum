@@ -79,36 +79,58 @@ cp -r frontend/dist/* "$RUNTIME_DIR/frontend/dist/"
 rm -rf "$RUNTIME_DIR/ai-layer"
 cp -r ai-layer "$RUNTIME_DIR/ai-layer"
 
+mkdir -p "$RUNTIME_DIR/config"
+cp config/quorum.toml "$RUNTIME_DIR/config/quorum.toml"
+
 mkdir -p "$RUNTIME_DIR/db/migrations"
 cp db/migrations/*.sql "$RUNTIME_DIR/db/migrations/"
 
 # ─── 4. write build info ──────────────────────────────────────────────────────
 cat > "$RUNTIME_DIR/BUILD_INFO.txt" << BUILDEOF
 Quorum Linux runtime package
-Repacked at: $(date '+%Y-%m-%d %H:%M:%S %z') (broker-coin fix + regime-aware entries)
+Repacked at: $(date '+%Y-%m-%d %H:%M:%S %z') (fill-aware learning + shadow-first validation)
 
 This build adds:
-- Bitkub "broker coin" fix (root cause of failed live buys / error 61): the discovery
-  universe now keeps only source="exchange", active, buy-unfrozen coins, and the broker
-  rejects a broker-coin order up front with a clear message instead of firing a doomed
-  request. Error 61 is now mapped to a human-readable reason.
-- Regime-aware entry style (Python judge): a clean trend now enters AT MARKET to ride the
-  move (no more waiting for a pullback that never comes), while ranging markets still buy
-  dips to support and only truly parabolic moves are converted to a pullback LIMIT.
-- Robust live cash read: a transient 0-balance read is retried before blocking, and the
-  old misleading "risk cap reduced order size to 0" is now an accurate cash message.
-- Trades view now shows the broker failure reason (note) inline on failed orders.
+- Limit-plan learning now waits for an actual candle touch before counting a fill; targets
+  reached before entry and expired entries are recorded as missed, never as fake profit.
+- Invalid v1 learning statistics are archived on first boot and replaced with a clean v2 brain.
+- Unproven setup buckets stay in shadow mode until they have at least 12 valid fills and
+  expectancy of at least +0.05R, preventing contaminated or weak signals from trading live.
+- Restores conservative confidence, liquidity, volatility, and regime RR thresholds that had
+  previously been loosened using the now-invalid v1 statistics.
+- Marketable LIMIT signals enter immediately instead of creating an already-triggered plan.
+- Fresh pending plans execute from the consensus/RR-validated signal instead of asking the
+  non-deterministic Judge again seconds later and cancelling BUY as HOLD.
+- Replacing a plan resets created_at, preventing brand-new plans from being treated as
+  older than 12 hours and re-analyzed every monitor tick.
+- Filled orders mark their source decision executed, fixing the report's misleading zero.
+- Judge uses each account's configured loss limit instead of a hard-coded -6% halt that
+  contradicted the backend governor and forced every BUY to HOLD.
+- HOLD/SELL verdicts can no longer create pending BUY plans from leftover JSON price fields;
+  pending entries now require the same explicit BUY + passed-consensus checks as immediate orders.
+- Includes re-entry cooldown protection after a settled loss.
 
 Carried over: deterministic realized P&L, always-on hard stop + catastrophic loss cap,
-fixed-% profit lock, live/paper dashboard badge, active position management (trailing).
+fixed-% profit lock, broker-coin validation, live/paper dashboard badge, active position
+management (trailing), liquidity/volatility/fee guards.
 
 Migrations run automatically on boot.
 
 Cross-built on macOS/arm64 via cargo-zigbuild + zig (linux/amd64 glibc).
-Tested: 66 cargo tests pass, python aggregator (5) + entry-discipline (13) tests pass, tsc clean, vite build clean.
+Tested: 67 cargo tests pass, 87 Python tests pass, typecheck clean, vite build clean.
 
 binary sha256: ${BINARY_SHA}
 BUILDEOF
+
+# Keep the runtime manifest truthful after every assembly. The previous static file still
+# contained hashes from an older binary/frontend and could not be used to verify a deploy.
+(
+  cd "$RUNTIME_DIR"
+  find backend/quorum frontend/dist ai-layer config/quorum.toml db/migrations -type f \
+    ! -path '*/__pycache__/*' ! -name '*.pyc' -print0 \
+    | sort -z \
+    | xargs -0 shasum -a 256
+) > "$RUNTIME_DIR/SHA256SUMS.txt"
 
 # ─── 5. pack zip ──────────────────────────────────────────────────────────────
 step "Packing zip..."
@@ -151,13 +173,14 @@ if [ ! -d "\$QUORUM_DIR" ]; then
   echo "[server] fresh install..."
   mv "\$UPDATE_DIR" "\$QUORUM_DIR"
 else
-  echo "[server] hot-update binary + frontend + ai-layer + migrations..."
+  echo "[server] hot-update binary + frontend + ai-layer + config + migrations..."
   cp "\$UPDATE_DIR/backend/quorum" "\$QUORUM_DIR/backend/quorum"
   chmod +x "\$QUORUM_DIR/backend/quorum"
   rm -rf "\$QUORUM_DIR/frontend/dist"
   cp -r "\$UPDATE_DIR/frontend/dist" "\$QUORUM_DIR/frontend/dist"
   rm -rf "\$QUORUM_DIR/ai-layer"
   cp -r "\$UPDATE_DIR/ai-layer" "\$QUORUM_DIR/ai-layer"
+  cp "\$UPDATE_DIR/config/quorum.toml" "\$QUORUM_DIR/config/quorum.toml"
   cp "\$UPDATE_DIR/db/migrations/"*.sql "\$QUORUM_DIR/db/migrations/"
   cp "\$UPDATE_DIR/BUILD_INFO.txt" "\$QUORUM_DIR/BUILD_INFO.txt"
   cp "\$UPDATE_DIR/SHA256SUMS.txt" "\$QUORUM_DIR/SHA256SUMS.txt"

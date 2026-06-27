@@ -55,3 +55,29 @@ def test_expired_marks_to_market_at_last_close():
 
 def test_invalid_levels():
     assert settle.settle_long(100, 110, 105, [])["status"] == "invalid"  # stop above entry
+
+
+def test_limit_waits_for_a_real_fill_before_counting_target():
+    bars = [_bar(111, 101, 109)]
+    r = settle.settle_planned_long("limit", 100, 110, 95, bars)
+    assert r["status"] == "missed"
+    assert r["r"] is None
+
+
+def test_limit_fills_then_can_win():
+    bars = [_bar(103, 99, 102), _bar(111, 104, 110)]
+    r = settle.settle_planned_long("limit", 100, 110, 95, bars)
+    assert r["status"] == "win"
+    assert r["entry_wait_bars"] == 1
+
+
+def test_unfilled_limit_stays_pending_until_entry_window_expires():
+    bars = [_bar(105, 101, 103), _bar(106, 101, 104)]
+    pending = settle.settle_planned_long(
+        "limit", 100, 110, 95, bars, max_entry_bars=3
+    )
+    assert pending["status"] == "pending"
+    missed = settle.settle_planned_long(
+        "limit", 100, 110, 95, bars, max_entry_bars=2
+    )
+    assert missed["status"] == "missed"

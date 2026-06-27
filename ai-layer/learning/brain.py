@@ -91,9 +91,16 @@ def evaluate(symbol: str, candles: list[dict[str, float]], structure: dict[str, 
         if not bars_after:
             still_open.append(e)
             continue
-        res = settle.settle_long(float(e.get("entry", 0)), float(e.get("target", 0)),
-                                 float(e.get("stop", 0)), bars_after,
-                                 max_bars=max_bars, fee_per_side=fee)
+        res = settle.settle_planned_long(
+            str(e.get("entry_type") or "market"),
+            float(e.get("entry", 0)),
+            float(e.get("target", 0)),
+            float(e.get("stop", 0)),
+            bars_after,
+            max_entry_bars=int(lcfg.get("max_entry_bars", 12)),
+            max_bars=max_bars,
+            fee_per_side=fee,
+        )
         if res["status"] in ("win", "loss", "expired"):
             edge.update_stats(stats, e.get("bucket", "unknown"), res["r"])
             if e.get("kind") == "live":
@@ -102,8 +109,11 @@ def evaluate(symbol: str, candles: list[dict[str, float]], structure: dict[str, 
                 cooldowns[symbol] = bar_ts  # just lost on this coin → cool off before re-entering
             settled_notes.append({"kind": e.get("kind"), "bucket": e.get("bucket"),
                                   "status": res["status"], "r": res["r"]})
-        elif res["status"] == "open":
+        elif res["status"] in ("open", "pending"):
             still_open.append(e)
+        elif res["status"] == "missed":
+            settled_notes.append({"kind": e.get("kind"), "bucket": e.get("bucket"),
+                                  "status": "missed", "r": None})
         # "invalid" → drop silently
 
     # ── 2) classify the current setup + gate the verdict ─────────────────────────
@@ -158,6 +168,7 @@ def evaluate(symbol: str, candles: list[dict[str, float]], structure: dict[str, 
             if re_ > 0 and rt_ > re_ > rs_ > 0:
                 still_open.append({
                     "symbol": symbol, "ts": bar_ts, "kind": recorded_kind,
+                    "entry_type": str(verdict.get("entry_type") or "market").lower(),
                     "entry": round(re_, 8), "target": round(rt_, 8), "stop": round(rs_, 8),
                     "bucket": bucket, "regime": regime, "rsi": round(rsi, 1),
                     "conviction": verdict.get("conviction"),

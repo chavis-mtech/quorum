@@ -20,10 +20,7 @@ _DEFAULTS: dict[str, Any] = {
     # the old web-scraped news+sentiment pair; those only run when [news].enabled is true.
     "agents": {"technical": True, "trend_ml": True, "flow": True,
                "sentiment": True, "news": True},
-    # min_confidence 0.52 → BUY consensus bar 0.55 (asymmetric +0.03). trend_ml damps ranging
-    # confidence, so proven-winner setups cluster at council ~0.55; 0.55 admits them, 0.58 would
-    # not. The aggregator runs BEFORE the brain's conf boost, so this is the binding gate.
-    "consensus": {"min_agreement": 3, "min_confidence": 0.52,
+    "consensus": {"min_agreement": 3, "min_confidence": 0.60,
                   "weights": {"technical": 1.0, "trend_ml": 1.0, "flow": 0.8,
                               "sentiment": 0.6, "news": 0.8}},
     "judge": {"enabled": True, "provider": "ollama", "model": "qwen3:14b",
@@ -37,15 +34,15 @@ _DEFAULTS: dict[str, Any] = {
     "learning": {"enabled": True, "fee_per_side": 0.0025, "max_settle_bars": 48,
                  "min_samples_gate": 6, "min_samples_conf": 5, "block_expectancy": -0.08,
                  "block_winrate_n": 8, "block_winrate": 0.34, "breaker_min_samples": 10,
-                 "breaker_expectancy": -0.15, "conf_span": 0.5, "conf_lo": 0.75, "conf_hi": 1.25,
+                 "breaker_expectancy": -0.15, "conf_span": 0.5, "conf_lo": 0.75, "conf_hi": 1.15,
+                 "require_proven_edge": True, "min_live_samples": 12,
+                 "min_live_expectancy": 0.05, "max_entry_bars": 12,
                  "reentry_cooldown_bars": 3, "reentry_loss_threshold": -0.5},
-    # deterministic "don't trade garbage" guard. Loosened for "small/risky coins ok": liquidity
-    # floor 15k (only the very thinnest blocked) and ATR ceiling 4%/bar (1.5×ATR stop = the -6%
-    # cap). Downside stays bounded by the planner's -5.5% stop clamp + the backend MAX_LOSS_PCT.
+    # deterministic "don't trade garbage" guard (thin/volatile/chop/flat/fee-unviable).
     "market_quality": {"enabled": True, "fee_per_side": 0.0025, "min_target_move": 0.012,
                        "min_net_rr": 1.2, "chop_er": 0.12, "chop_adx": 18.0,
-                       "flat_atr_pct": 0.003, "min_liquidity_thb": 15000.0,
-                       "max_atr_pct": 0.04},
+                       "flat_atr_pct": 0.003, "min_liquidity_thb": 50000.0,
+                       "max_atr_pct": 0.025},
     "risk": {"max_position_pct": 0.10, "daily_loss_limit": 0.05,
              "max_open_positions": 5},
 }
