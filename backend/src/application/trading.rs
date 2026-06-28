@@ -45,10 +45,13 @@ const RESCUE_STOP_LOSS_PCT: f64 = 0.025;
 // ─── Hard risk caps (always on, independent of the plan's own stop) ─────────────
 // Catastrophic per-trade loss cap: no single position is ever allowed to lose more than this,
 // even if the AI set a wider stop or no stop at all. The effective exit stop is floored at
-// avg_cost*(1-MAX_LOSS_PCT) so a definite loss is always cut. "Balanced" profile = ~6%.
+// avg_cost*(1-MAX_LOSS_PCT) so a definite loss is always cut.
+// Tightened from 0.06: live data (account 4, 73 trades) showed avg loss -9.33 vs avg win +5.11
+// per trade despite a 53% win rate — the 6% cap plus 60s poll interval let thin-liquidity market
+// sells (AAVE/AERO/ID/AXL) slip past the intended stop to ~10.6% before the watch loop caught up.
 // NOTE: there is intentionally NO time-based ("stale") exit — the user is fine holding through
 // long drawdowns that eventually recover; only a real stop-out or a broken thesis closes a trade.
-const MAX_LOSS_PCT: f64 = 0.06;
+const MAX_LOSS_PCT: f64 = 0.05;
 
 pub fn normalize_ai_provider(provider: &str) -> String {
     match provider.trim().to_lowercase().as_str() {
@@ -2371,10 +2374,10 @@ pub fn default_settings() -> TradingSettings {
         max_open_positions: 5,
         allow_sell: true,
         take_profit_pct: 0.0,
-        // 5% hard stop is always on by default (Balanced); 0 here would mean "no stop" and let a
+        // 3.5% hard stop is always on by default (Balanced); 0 here would mean "no stop" and let a
         // position bleed until the AI decides to sell. The catastrophic cap (MAX_LOSS_PCT) bounds
         // the worst case even tighter regardless of this value.
-        stop_loss_pct: 0.05,
+        stop_loss_pct: 0.035,
         discovery_enabled: false,
         discovery_top_n: 5,
         paused: false,
